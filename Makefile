@@ -14,6 +14,9 @@ bootstrap: ## Create S3 state bucket and write backend.tfbackend
 init: ## Initialize Terraform (requires bootstrap first)
 	$(TF) init -backend-config=backend.tfbackend
 
+format: ## Format Terraform code
+	$(TF) fmt -recursive -check
+
 plan: ## Preview infrastructure changes
 	$(TF) plan
 
