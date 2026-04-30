@@ -1,6 +1,8 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap
+TF := terraform -chdir=infra
+
+.PHONY: help bootstrap init plan apply destroy
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -8,3 +10,15 @@ help:
 
 bootstrap: ## Create S3 state bucket and write backend.tfbackend
 	@bash bootstrap.sh
+
+init: ## Initialize Terraform (requires bootstrap first)
+	$(TF) init -backend-config=backend.tfbackend
+
+plan: ## Preview infrastructure changes
+	$(TF) plan
+
+apply: ## Apply infrastructure changes
+	$(TF) apply
+
+destroy: ## Destroy all infrastructure
+	$(TF) destroy

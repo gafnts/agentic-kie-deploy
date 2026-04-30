@@ -43,8 +43,8 @@ aws s3api put-bucket-encryption \
 
 echo ""
 echo "Bootstrap complete."
-echo "Writing backend.tfbackend."
-cat > backend.tfbackend <<EOF
+echo "Writing infra/backend.tfbackend."
+cat > ./infra/backend.tfbackend <<EOF
 bucket       = "${BUCKET}"
 key          = "service/terraform.tfstate"
 region       = "${AWS_REGION}"
@@ -54,4 +54,4 @@ EOF
 
 echo ""
 echo "Done."
-echo "You now may run: terraform init -backend-config=backend.tfbackend"
+echo "You now may run: terraform -chdir=infra init -backend-config=backend.tfbackend"
