@@ -1,0 +1,14 @@
+[project]
+name = "agentic-kie-deploy"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "nda",
+]
+
+[tool.uv.sources]
+nda = { git = "https://github.com/gafnts/kleister-nda-preparation" }
