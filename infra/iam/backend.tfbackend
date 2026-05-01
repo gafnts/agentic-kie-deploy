@@ -1,0 +1,5 @@
+bucket       = "agentic-kie-tfstate-8624bc76"
+key          = "service/iam/terraform.tfstate"
+region       = "us-east-1"
+use_lockfile = true
+encrypt      = true
