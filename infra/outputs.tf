@@ -1,7 +1,7 @@
 output "ingestion_bucket_name" {
-  value = aws_s3_bucket.ingestion_bucket.bucket
+  value = module.storage.bucket_name
 }
 
 output "ingestion_bucket_arn" {
-  value = aws_s3_bucket.ingestion_bucket.arn
+  value = module.storage.bucket_arn
 }
