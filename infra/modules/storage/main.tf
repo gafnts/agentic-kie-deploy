@@ -26,3 +26,32 @@ resource "aws_s3_bucket_notification" "ingestion" {
   bucket      = aws_s3_bucket.ingestion.id
   eventbridge = true
 }
+
+data "aws_iam_policy_document" "ingestion_tls_only" {
+  statement {
+    sid     = "DenyInsecureTransport"
+    effect  = "Deny"
+    actions = ["s3:*"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    resources = [
+      aws_s3_bucket.ingestion.arn,
+      "${aws_s3_bucket.ingestion.arn}/*",
+    ]
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "ingestion_tls_only" {
+  bucket = aws_s3_bucket.ingestion.id
+  policy = data.aws_iam_policy_document.ingestion_tls_only.json
+}
