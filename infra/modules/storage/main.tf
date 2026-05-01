@@ -35,6 +35,18 @@ resource "aws_s3_bucket_notification" "ingestion" {
   eventbridge = true
 }
 
+resource "aws_s3_bucket_cors_configuration" "ingestion" {
+  bucket = aws_s3_bucket.ingestion.id
+
+  cors_rule {
+    allowed_methods = ["PUT"]
+    allowed_origins = var.allowed_upload_origins
+    allowed_headers = ["*"]
+    expose_headers  = ["ETag"]
+    max_age_seconds = 3000
+  }
+}
+
 data "aws_iam_policy_document" "ingestion_tls_only" {
   statement {
     sid     = "DenyInsecureTransport"

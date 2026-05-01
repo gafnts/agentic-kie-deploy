@@ -15,3 +15,9 @@ variable "environment" {
   type        = string
   default     = "dev"
 }
+
+variable "allowed_upload_origins" {
+  description = "Origins allowed to make cross-origin PUT requests to the ingestion bucket"
+  type        = list(string)
+  default     = ["https://gabriel.com.gt"]
+}
