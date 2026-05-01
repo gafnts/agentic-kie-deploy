@@ -15,7 +15,7 @@ init: ## Initialize Terraform (requires bootstrap first)
 	$(TF) init -backend-config=backend.tfbackend
 
 format: ## Format Terraform code
-	$(TF) fmt -recursive -check
+	$(TF) fmt -recursive
 
 plan: ## Preview infrastructure changes
 	$(TF) plan
