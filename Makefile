@@ -5,30 +5,41 @@ TF  := terraform -chdir=infra
 VARS    := -var-file=envs/$(ENV).tfvars
 BACKEND := -backend-config=envs/$(ENV).backend.tfbackend
 
-.PHONY: help bootstrap init plan apply destroy format
+.PHONY: help bootstrap backend init plan ci-plan apply ci-apply destroy format
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s %s\n", $$1, $$2}'
 
-bootstrap: ## Create state bucket and write backend files for all envs
+bootstrap: ## Create state bucket and write backend files for all environments
 	@bash bootstrap.sh
 
-init: ## terraform init for ENV
+backend: ## Write backend files for all environments (used by CI; no AWS calls)
+	@bash bootstrap-backend.sh
+
+init: ## Initialize Terraform backend for ENV
 	$(TF) init -reconfigure $(BACKEND)
 
-plan: ## terraform plan for ENV
+plan: ## Preview infrastructure changes for ENV
 	$(TF) plan $(VARS)
 
-apply: ## terraform apply for ENV (refuses prod by default)
+ci-plan: ## Preview changes and save plan to tfplan.ENV (used by CI)
+	$(TF) plan -out=tfplan.$(ENV) $(VARS)
+
+apply: ## Apply infrastructure changes for ENV (refuses prod unless I_KNOW=1)
 	@if [ "$(ENV)" = "prod" ] && [ "$(I_KNOW)" != "1" ]; then \
 		echo "Refusing to apply prod from local. CI owns prod."; exit 1; fi
 	$(TF) apply $(VARS)
 
-destroy: ## terraform destroy for ENV (refuses prod by default)
+ci-apply: ## Apply saved plan tfplan.ENV (used by CI; refuses prod unless I_KNOW=1)
+	@if [ "$(ENV)" = "prod" ] && [ "$(I_KNOW)" != "1" ]; then \
+		echo "Refusing to apply prod from local. CI owns prod."; exit 1; fi
+	$(TF) apply tfplan.$(ENV)
+
+destroy: ## Destroy all infrastructure for ENV (refuses prod unless I_KNOW=1)
 	@if [ "$(ENV)" = "prod" ] && [ "$(I_KNOW)" != "1" ]; then \
 		echo "Refusing to destroy prod. Re-run with I_KNOW=1."; exit 1; fi
 	$(TF) destroy $(VARS)
 
-format: ## Format Terraform code
+format: ## Format all Terraform files
 	$(TF) fmt -recursive
