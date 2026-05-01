@@ -36,6 +36,39 @@ The pipeline is fully asynchronous. A client calls a small presigner Lambda behi
 
 Every component scales to zero when idle. Ingress is synchronous and cheap (pre-signed URL handoff). Extraction is fully decoupled and retryable.
 
+```mermaid
+flowchart LR
+    classDef client   fill:#f6f8fa,stroke:#6e7781,color:#24292f
+    classDef compute  fill:#cae8ff,stroke:#0969da,color:#0a3069
+    classDef storage  fill:#acf2bd,stroke:#1a7f37,color:#044f1e
+    classDef event    fill:#ffd8b5,stroke:#bc4c00,color:#5c2200
+    classDef queue    fill:#eddeff,stroke:#8250df,color:#3d1d6e
+    classDef dlq      fill:#ffebe9,stroke:#cf222e,color:#6e0006
+
+    Client(["Client"]):::client
+
+    subgraph AWS
+        APIGW["API Gateway"]:::compute
+        Presigner["Presigner Lambda"]:::compute
+        S3[("Ingestion Bucket")]:::storage
+        EB(["EventBridge"]):::event
+        SQS["SQS"]:::queue
+        DLQ["DLQ"]:::dlq
+        Extractor["Extractor Lambda\n(container)"]:::compute
+        DDB[("DynamoDB")]:::storage
+    end
+
+    Client -->|"① request URL"| APIGW
+    APIGW --> Presigner
+    Presigner -->|"② pre-signed URL"| Client
+    Client -->|"③ PUT document"| S3
+    S3 -->|"Object Created"| EB
+    EB --> SQS
+    SQS -.->|"failed messages"| DLQ
+    SQS --> Extractor
+    Extractor -->|"write result"| DDB
+```
+
 ---
 
 ## Modules
