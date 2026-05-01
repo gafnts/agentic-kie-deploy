@@ -3,6 +3,14 @@ resource "aws_s3_bucket" "ingestion" {
   force_destroy = true
 }
 
+resource "aws_s3_bucket_ownership_controls" "ingestion" {
+  bucket = aws_s3_bucket.ingestion.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
 resource "aws_s3_bucket_public_access_block" "ingestion" {
   bucket = aws_s3_bucket.ingestion.id
 
