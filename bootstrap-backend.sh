@@ -20,3 +20,12 @@ use_lockfile = true
 encrypt      = true
 EOF
 done
+
+mkdir -p ./infra/iam
+cat > ./infra/iam/backend.tfbackend <<EOF
+bucket       = "${BUCKET}"
+key          = "service/iam/terraform.tfstate"
+region       = "${AWS_REGION}"
+use_lockfile = true
+encrypt      = true
+EOF
