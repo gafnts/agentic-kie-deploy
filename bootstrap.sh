@@ -3,7 +3,6 @@ set -euo pipefail
 
 AWS_REGION="${AWS_REGION:-us-east-1}"
 PROJECT="agentic-kie"
-ENVS=("local" "dev" "prod")
 
 _SUFFIX=$(echo -n "${PROJECT}" | openssl dgst -sha256 | awk '{print $2}' | cut -c1-8)
 BUCKET="${PROJECT}-tfstate-${_SUFFIX}"
@@ -43,23 +42,17 @@ aws s3api put-bucket-encryption \
   --server-side-encryption-configuration \
     '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
 
-# 5. Write one backend file per environment
-mkdir -p ./infra/envs
-for ENV in "${ENVS[@]}"; do
-  BACKEND_FILE="./infra/envs/${ENV}.backend.tfbackend"
-  echo "Writing ${BACKEND_FILE}"
-  cat > "${BACKEND_FILE}" <<EOF
-bucket       = "${BUCKET}"
-key          = "service/${ENV}/terraform.tfstate"
-region       = "${AWS_REGION}"
-use_lockfile = true
-encrypt      = true
-EOF
-done
+# 5. Write backend files for all environments
+echo ""
+echo "Writing backend files"
+bash bootstrap-backend.sh
 
 echo ""
 echo "Bootstrap complete."
-echo "Backend files written for: ${ENVS[*]}"
 echo ""
 echo "Next:"
-echo "  make init ENV=local   # then dev, then prod"
+echo "  make init     # initialize local (defaults to ENV=local)"
+echo "  make plan     # preview changes"
+echo "  make apply    # apply changes"
+echo ""
+echo "Dev and prod are initialized and applied by CI on push."
