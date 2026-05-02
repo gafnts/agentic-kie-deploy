@@ -1,5 +1,7 @@
 # Architecture Decision Records
 
+This directory records the significant architectural decisions made in this project. Each ADR captures the context, the options considered, and the reasoning behind the choice — so future contributors understand not just what was decided, but why, and what tradeoffs were accepted.
+
 ## Naming conventions
 
 | Element | Rule |
@@ -9,7 +11,8 @@
 | Title | Short imperative phrase describing the decision (verb + noun), e.g. `use-event-driven-pipeline` |
 | Status | `Proposed` → `Accepted` → `Deprecated` / `Superseded by ADR-NNNN` |
 
-When a decision is reversed or replaced, mark the old ADR as `Superseded by ADR-NNNN` and link forward. Never delete an ADR.
+> [!NOTE]
+> When a decision is reversed or replaced, mark the old ADR as `Superseded by ADR-NNNN` and link forward. Never delete an ADR.
 
 ## Index
 

@@ -3,9 +3,9 @@
   <strong>Serverless, event-driven AWS infrastructure for asynchronous document key-information extraction.</strong>
 </p>
 <p align="center">
-<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
 <a href="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-dev.yml"><img src="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-dev.yml/badge.svg" alt="Deploy dev"></a>
 <a href="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-prod.yml"><img src="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-prod.yml/badge.svg" alt="Deploy prod"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
 </p>
 
 ---
