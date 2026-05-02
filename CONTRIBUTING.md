@@ -174,7 +174,7 @@ After the merge:
 
 1. CI runs the `plan` job, generates a saved plan, uploads it as a workflow artifact.
 2. CI queues the `apply` job, which waits at the prod environment approval gate.
-3. You get notified. 
+3. You get notified:
    - Open the workflow run.
    - Review the plan in the previous job's logs.
    - Click "Review deployments" → Approve.
