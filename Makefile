@@ -12,7 +12,7 @@ IAM_BACKEND := -backend-config=backend.tfbackend
 .PHONY: help install tflint-init check lint format type test \
         bootstrap backend \
         iam-init iam-plan iam-apply \
-        init plan ci-plan apply ci-apply destroy tf-fmt
+        init plan ci-plan apply ci-apply destroy tf-format lock
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -100,3 +100,8 @@ destroy: ## Destroy all infrastructure for ENV (refuses prod unless I_KNOW=1)
 
 tf-format: ## Format all Terraform files
 	$(TF) fmt -recursive
+
+lock: ## Regenerate .terraform.lock.hcl for linux_amd64 + darwin (arm64/amd64) in all modules
+	@find infra -name ".terraform.lock.hcl" -exec dirname {} \; | \
+		xargs -I{} terraform -chdir={} providers lock \
+		-platform=linux_amd64 -platform=darwin_amd64 -platform=darwin_arm64

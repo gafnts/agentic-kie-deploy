@@ -223,6 +223,14 @@ If the plan looks wrong at the approval gate, reject it. Nothing is applied.
 
 Most changes are app-level — new modules in `infra/modules/`, wired into `infra/main.tf`. The IAM roles already have `PowerUserAccess`, so they cover almost any AWS service you'd add. The deploy flow is unchanged.
 
+After adding a new Terraform module or bumping a provider version, regenerate the lock files so CI (linux/amd64) has the right platform hashes:
+
+```bash
+make lock
+```
+
+Then commit the updated `.terraform.lock.hcl` files alongside your change. If you skip this, the `terraform_validate` pre-commit hook will fail in CI with "files were modified by this hook".
+
 You only need to touch `infra/iam/` when:
 
 - Adding a new IAM-related resource pattern that needs explicit allow (rare).
@@ -237,6 +245,7 @@ You only need to touch `infra/iam/` when:
 |---|---|
 | `make install` | Sync deps, install pre-commit hooks (both stages), install tflint plugins |
 | `make tflint-init` | Refresh tflint plugins after a `.tflint.hcl` version bump |
+| `make lock` | Regenerate `.terraform.lock.hcl` for all platforms (run after adding a module or bumping a provider) |
 | `make check` | Run every pre-commit hook against every file (both stages) |
 | `make lint` | Run ruff check on `src` |
 | `make format` | Apply ruff lint fixes and formatting to `src` |
