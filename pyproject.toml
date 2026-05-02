@@ -3,12 +3,20 @@ name = "agentic-kie-deploy"
 version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.13"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
 dependencies = []
 
 [dependency-groups]
 dev = [
-    "nda",
+  "nda",
+  "pre-commit>=4.6",
+  "pyproject-fmt>=2.21.1",
+  "shellcheck-py>=0.11.0.1",
 ]
 
-[tool.uv.sources]
-nda = { git = "https://github.com/gafnts/kleister-nda-preparation" }
+[tool.uv]
+sources.nda = { git = "https://github.com/gafnts/kleister-nda-preparation" }
