@@ -109,22 +109,23 @@ Always set `AWS_PROFILE=agentic-kie-local` (or export it once per shell session)
 ```bash
 export AWS_PROFILE=agentic-kie-local
 
-make init      # initialize the local backend (idempotent, safe to re-run)
-make plan      # preview changes
-make apply     # apply changes
-make destroy   # tear down all local resources
+make init      # Initialize the local backend (idempotent, safe to re-run)
+make plan      # Preview changes
+make apply     # Apply changes
+make destroy   # Tear down all local resources
 ```
 
-`make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1` — only CI is allowed to set that.
+> [!IMPORTANT]
+> `make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1` — only CI is allowed to set that.
 
 ### Opening a PR
 
 Branch from `develop`, push, open a PR targeting `develop`:
 
 ```bash
-git checkout develop
+git switch develop
 git pull
-git checkout -b feature/my-change
+git switch -b feature/my-change
 # ... edit ...
 git push -u origin feature/my-change
 ```
@@ -141,7 +142,10 @@ After the merge:
 
 1. CI runs the `plan` job, generates a saved plan, uploads it as a workflow artifact.
 2. CI queues the `apply` job, which waits at the prod environment approval gate.
-3. You get notified. Open the workflow run, review the plan in the previous job's logs, click "Review deployments" → Approve.
+3. You get notified. 
+   - Open the workflow run.
+   - Review the plan in the previous job's logs.
+   - Click "Review deployments" → Approve.
 4. CI applies the saved plan. The exact same bytes that were generated in step 1.
 
 If the plan looks wrong at the approval gate, reject it. Nothing is applied.
@@ -181,61 +185,6 @@ You only need to touch `infra/iam/` when:
 - `infra/iam/iam.tfvars` — contains your principal ARN
 - `infra/tfplan.*` — saved plan binaries
 - `plan.txt` — captured plan output for CI comments
-
-
-
-
-
-### Bootstrap (one-time, with admin credentials)
-
-Two resources must exist before anything else can run. Execute these once per AWS account:
-
-1. **State backend + IAM tfvars** — creates the private, versioned, encrypted S3 bucket, writes `infra/envs/*.backend.tfbackend` for every environment, and generates `infra/iam/iam.tfvars` populated from the current AWS caller identity (`local_principal_arn`) and the bucket name (`state_bucket_name`). Idempotent: re-running skips files that already exist.
-
-   ```bash
-   make bootstrap
-   ```
-
-2. **Deploy roles** — creates the three assumable roles (`local`, `dev`, `prod`) and their trust/permission policies:
-
-   ```bash
-   make iam-init
-   make iam-apply
-
-   terraform -chdir=infra/iam output dev_role_arn    # paste into GitHub vars.AWS_ROLE_ARN_DEV
-   terraform -chdir=infra/iam output prod_role_arn   # paste into GitHub vars.AWS_ROLE_ARN_PROD
-   terraform -chdir=infra/iam output local_role_arn  # configure in your ~/.aws/config
-   ```
-
-After bootstrap, all local and CI operations run through their respective assumable roles.
-
-### Local role usage
-
-Add a profile to `~/.aws/config` to assume the `local` role:
-
-```ini
-[profile agentic-kie-local]
-role_arn       = arn:aws:iam::<account-id>:role/agentic-kie-local-deploy
-source_profile = default
-region         = us-east-1
-```
-
-Then prefix Make targets with the profile:
-
-```bash
-AWS_PROFILE=agentic-kie-local make init
-AWS_PROFILE=agentic-kie-local make plan
-AWS_PROFILE=agentic-kie-local make apply
-```
-
-### Delivery pipelines
-
-Two workflows under [`.github/workflows/`](.github/workflows/), gated to changes in `infra/**`:
-
-- **`deploy-dev.yml`** (`develop`): on PR, runs `fmt`/`validate`/`plan` and posts the plan as a sticky PR comment. On merge, auto-applies.
-- **`deploy-prod.yml`** (`main`): on PR, posts a plan comment. On merge, generates a saved plan via `make ci-plan ENV=prod` and uploads `tfplan.prod` as an artifact. The `apply` job is gated by the `prod` GitHub Environment (manual approval) and applies the saved plan via `make ci-apply`.
-
-Both workflows authenticate via OIDC and use a per-environment `concurrency` group to prevent concurrent deploys against the same Terraform state.
 
 ### Design notes
 
