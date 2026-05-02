@@ -1,5 +1,7 @@
 # Contributing
 
+This repo contains the Terraform infrastructure for the agentic-kie project, deployed to AWS across three environments (`local`, `dev`, `prod`). Contributing means authoring Terraform — every change is reviewed via a CI-generated plan before it lands, and prod requires a manual approval gate on top of that.
+
 > [!IMPORTANT]
 > This project requires:
 > - [Terraform](https://developer.hashicorp.com/terraform/install) ~> 1.15.0
@@ -8,6 +10,26 @@
 
 > [!NOTE]
 > Check if your AWS account already has a GitHub OIDC provider configured: `aws iam list-open-id-connect-providers`. If it's not there, create it once (`token.actions.githubusercontent.com`, audience `sts.amazonaws.com`). The IAM module references it but doesn't create it.
+
+## Contents
+
+- [DevOps strategy](#devops-strategy)
+  - [Environment model](#environment-model)
+  - [Branch model](#branch-model)
+- [First-time setup](#first-time-setup)
+  - [Bootstrap the remote state backend](#bootstrap-the-remote-state-backend)
+  - [Create the IAM roles](#create-the-iam-roles)
+  - [Configure GitHub](#configure-github)
+  - [Configure your local AWS profile](#configure-your-local-aws-profile)
+- [Day-to-day workflow](#day-to-day-workflow)
+  - [Local iteration](#local-iteration)
+  - [Opening a PR](#opening-a-pr)
+  - [Promoting to prod](#promoting-to-prod)
+  - [Adding new infrastructure](#adding-new-infrastructure)
+- [Reference](#reference)
+  - [Make targets](#make-targets)
+  - [Files that are gitignored](#files-that-are-gitignored)
+  - [Design notes](#design-notes)
 
 ## DevOps strategy
 
@@ -45,7 +67,7 @@ flowchart LR
 
 You only do it once per AWS account.
 
-### 1. Bootstrap the remote state backend
+### Bootstrap the remote state backend
 
 Creates the S3 bucket that holds Terraform state for all three environments, the four `*.backend.tfbackend` config files (one per env, plus one for the IAM bootstrap), and `infra/iam/iam.tfvars` (gitignored) pre-populated with your caller ARN and bucket name:
 
@@ -55,7 +77,7 @@ make bootstrap
 
 The bucket is private, versioned, encrypted, and uses S3 native locking (`use_lockfile = true`). No DynamoDB table required. The bootstrap script is idempotent.
 
-### 2. Create the IAM roles
+### Create the IAM roles
 
 The three deploy roles (`local`, `dev`, `prod`) live in a separate Terraform root at `infra/iam/`. They're applied once with admin credentials and rarely touched afterward.
 
@@ -65,7 +87,7 @@ make iam-init && make iam-apply
 
 The output gives you three role ARNs. Keep them — you'll paste two into GitHub and one into your AWS config.
 
-### 3. Configure GitHub
+### Configure GitHub
 
 In the repo settings:
 
@@ -79,7 +101,7 @@ In the repo settings:
 
 Variables (not secrets) is correct since role ARNs aren't sensitive on their own.
 
-### 4. Configure your local AWS profile
+### Configure your local AWS profile
 
 Add to `~/.aws/config`:
 
@@ -175,7 +197,7 @@ You only need to touch `infra/iam/` when:
 | `make plan` | Preview infrastructure changes for `ENV` |
 | `make ci-plan` | Preview changes and save plan to `tfplan.<env>` (used by CI) |
 | `make apply` | Apply infrastructure changes for `ENV` (refuses prod unless `I_KNOW=1`) |
-| `make ci-apply` | Apply saved plan `tfplan.<env>` (used by CI) |
+| `make ci-apply` | Apply saved plan `tfplan.<env>` (used by CI for prod) |
 | `make destroy` | Destroy all infrastructure for `ENV` (refuses prod unless `I_KNOW=1`) |
 | `make format` | Format all Terraform files |
 
@@ -192,5 +214,5 @@ You only need to touch `infra/iam/` when:
 - **State bucket and IAM roles** are the only resources provisioned with admin credentials. All subsequent operations use the scoped deploy roles.
 - **Backend files** (`infra/envs/*.backend.tfbackend`, `infra/iam/backend.tfbackend`) are committed to the repo and generated deterministically by `bootstrap-backend.sh` from the project name. CI regenerates them on every job; locally they are generated once.
 - **`make plan` / `make apply`** behave identically locally and in CI. The only differences are the `AWS_PROFILE` value and the `I_KNOW=1` flag required for prod.
-- **Every new resource must be tagged `Environment=<env>`** — each deploy role has an explicit IAM deny on resources not tagged for its own environment. A missing tag won't surface during `plan`; it silently blocks the `apply`.
-- **Prod protection is enforced at the IAM trust layer, not just CI** — the prod role's OIDC trust condition requires `environment:prod` GitHub environment context. Bypassing the approval gate in the workflow still results in a failed `AssumeRoleWithWebIdentity` call.
+- **Every new resource must be tagged `Environment=<env>`**. Each deploy role has an explicit IAM deny on resources not tagged for its own environment. A missing tag won't surface during `plan`; it silently blocks the `apply`.
+- **Prod protection is enforced at the IAM trust layer, not just CI**. The prod role's OIDC trust condition requires `environment:prod` GitHub environment context. Bypassing the approval gate in the workflow still results in a failed `AssumeRoleWithWebIdentity` call.
