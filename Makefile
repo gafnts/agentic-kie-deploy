@@ -1,11 +1,16 @@
 .DEFAULT_GOAL := help
 
 ENV ?= local
-TF  := terraform -chdir=infra
+TF      := terraform -chdir=infra
 VARS    := -var-file=envs/$(ENV).tfvars
 BACKEND := -backend-config=envs/$(ENV).backend.tfbackend
 
-.PHONY: help bootstrap backend init plan ci-plan apply ci-apply destroy format
+IAM_TF      := terraform -chdir=infra/iam
+IAM_VARS    := -var-file=iam.tfvars
+IAM_BACKEND := -backend-config=backend.tfbackend
+
+.PHONY: help bootstrap backend init plan ci-plan apply ci-apply destroy format \
+        iam-init iam-plan iam-apply
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -16,6 +21,15 @@ bootstrap: ## Create state bucket and write backend files for all environments
 
 backend: ## Write backend files for all environments (used by CI; no AWS calls)
 	@bash bootstrap-backend.sh
+
+iam-init: ## Initialize Terraform backend for the IAM bootstrap module
+	$(IAM_TF) init -reconfigure $(IAM_BACKEND)
+
+iam-plan: ## Preview changes to the IAM bootstrap module
+	$(IAM_TF) plan $(IAM_VARS)
+
+iam-apply: ## Apply the IAM bootstrap module (creates deploy roles)
+	$(IAM_TF) apply $(IAM_VARS)
 
 init: ## Initialize Terraform backend for ENV
 	$(TF) init -reconfigure $(BACKEND)
