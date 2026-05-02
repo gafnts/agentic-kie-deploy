@@ -1,0 +1,60 @@
+name: Checks
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  TF_VERSION: 1.15.0
+  TFLINT_VERSION: v0.59.1
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  check:
+    name: Pre-commit (all stages)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: terraform-linters/setup-tflint@v5
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+
+      - name: Cache pre-commit environments
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: pre-commit-${{ runner.os }}-
+
+      - name: Sync dependencies
+        run: uv sync --all-groups
+
+      - name: Initialize tflint plugins
+        run: tflint --init
+        working-directory: infra
+
+      - name: Generate backend files
+        run: make backend
+
+      - name: Run all hooks
+        run: make check
