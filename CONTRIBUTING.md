@@ -11,8 +11,11 @@ The Makefile is the entry point for every common operation, locally and in CI. A
 
 | Target | Purpose |
 |---|---|
-| `make bootstrap` | Create the shared state bucket and write backend files for every environment (one-time, admin credentials) |
+| `make bootstrap` | Create the shared state bucket, write backend files for every environment, and generate `infra/iam/iam.tfvars` from the current AWS caller identity (one-time, admin credentials) |
 | `make backend` | Regenerate `infra/envs/*.backend.tfbackend` without touching AWS (used by CI on every job) |
+| `make iam-init` | `terraform init` for the IAM bootstrap module |
+| `make iam-plan` | Preview changes to the IAM bootstrap module |
+| `make iam-apply` | Apply the IAM bootstrap module — creates the three deploy roles (one-time, admin credentials) |
 | `make init ENV=…` | `terraform init` against the env's backend config |
 | `make plan ENV=…` | Preview changes for the env |
 | `make apply ENV=…` | Apply changes for the env (refuses `prod` unless `I_KNOW=1`) |
@@ -41,7 +44,7 @@ Trust policies are defined in [`infra/iam/main.tf`](infra/iam/main.tf). Each rol
 
 Two resources must exist before anything else can run. Execute these once per AWS account:
 
-1. **State backend** — creates the private, versioned, encrypted S3 bucket and writes `infra/envs/*.backend.tfbackend` for every environment:
+1. **State backend + IAM tfvars** — creates the private, versioned, encrypted S3 bucket, writes `infra/envs/*.backend.tfbackend` for every environment, and generates `infra/iam/iam.tfvars` populated from the current AWS caller identity (`local_principal_arn`) and the bucket name (`state_bucket_name`). Idempotent: re-running skips files that already exist.
 
    ```bash
    make bootstrap
@@ -50,14 +53,12 @@ Two resources must exist before anything else can run. Execute these once per AW
 2. **Deploy roles** — creates the three assumable roles (`local`, `dev`, `prod`) and their trust/permission policies:
 
    ```bash
-   cd infra/iam
-   terraform init -backend-config=backend.tfbackend
-   terraform plan  -var-file=iam.tfvars
-   terraform apply -var-file=iam.tfvars
+   make iam-init
+   make iam-apply
 
-   terraform output dev_role_arn    # paste into GitHub vars.AWS_ROLE_ARN_DEV
-   terraform output prod_role_arn   # paste into GitHub vars.AWS_ROLE_ARN_PROD
-   terraform output local_role_arn  # configure in your ~/.aws/config
+   terraform -chdir=infra/iam output dev_role_arn    # paste into GitHub vars.AWS_ROLE_ARN_DEV
+   terraform -chdir=infra/iam output prod_role_arn   # paste into GitHub vars.AWS_ROLE_ARN_PROD
+   terraform -chdir=infra/iam output local_role_arn  # configure in your ~/.aws/config
    ```
 
 After bootstrap, all local and CI operations run through their respective assumable roles.

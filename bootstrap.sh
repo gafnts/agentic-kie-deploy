@@ -47,12 +47,26 @@ echo ""
 echo "Writing backend files"
 bash bootstrap-backend.sh
 
+# 6. Write iam.tfvars from caller identity (idempotent)
+IAM_TFVARS="./infra/iam/iam.tfvars"
+echo ""
+if [ -f "${IAM_TFVARS}" ]; then
+  echo "  ${IAM_TFVARS} exists, skipping"
+else
+  PRINCIPAL_ARN=$(aws sts get-caller-identity --query Arn --output text)
+  echo "Writing ${IAM_TFVARS} (principal: ${PRINCIPAL_ARN})"
+  cat > "${IAM_TFVARS}" <<EOF
+local_principal_arn = "${PRINCIPAL_ARN}"
+state_bucket_name   = "${BUCKET}"
+EOF
+fi
+
 echo ""
 echo "Bootstrap complete."
 echo ""
 echo "Next:"
-echo "  make init     # initialize local (defaults to ENV=local)"
-echo "  make plan     # preview changes"
-echo "  make apply    # apply changes"
+echo "  make iam-init && make iam-apply   # one-time: create deploy roles"
+echo "  make init                         # initialize local"
+echo "  make plan && make apply           # apply local infra"
 echo ""
 echo "Dev and prod are initialized and applied by CI on push."
