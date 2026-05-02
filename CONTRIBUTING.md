@@ -1,44 +1,199 @@
 # Contributing
 
-## Prerequisites
+> [!IMPORTANT]
+> This project requires:
+> - [Terraform](https://developer.hashicorp.com/terraform/install) ~> 1.15.0
+> - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) configured with credentials
+> - [GitHub OIDC provider](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws) configured in your AWS account
 
-- [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.15
-- [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) configured with credentials
-
-## Make targets
-
-The Makefile is the entry point for every common operation, locally and in CI. All targets accept `ENV={local,dev,prod}` (defaults to `local`).
-
-| Target | Purpose |
-|---|---|
-| `make bootstrap` | Create the shared state bucket, write backend files for every environment, and generate `infra/iam/iam.tfvars` from the current AWS caller identity (one-time, admin credentials) |
-| `make backend` | Regenerate `infra/envs/*.backend.tfbackend` without touching AWS (used by CI on every job) |
-| `make iam-init` | `terraform init` for the IAM bootstrap module |
-| `make iam-plan` | Preview changes to the IAM bootstrap module |
-| `make iam-apply` | Apply the IAM bootstrap module — creates the three deploy roles (one-time, admin credentials) |
-| `make init ENV=…` | `terraform init` against the env's backend config |
-| `make plan ENV=…` | Preview changes for the env |
-| `make apply ENV=…` | Apply changes for the env (refuses `prod` unless `I_KNOW=1`) |
-| `make ci-plan ENV=…` | Plan and save to `tfplan.<env>` (used by CI to hand a saved plan to the apply job) |
-| `make ci-apply ENV=…` | Apply a saved `tfplan.<env>` (used by CI; same prod guard) |
-| `make destroy ENV=…` | Destroy the env (refuses `prod` unless `I_KNOW=1`) |
-| `make format` | `terraform fmt -recursive` |
-
-State locking uses S3 native locking (`use_lockfile = true`); no DynamoDB table is required. Backend files are derived from the project name (see `bootstrap-backend.sh`) and are gitignored — never commit them.
+> [!NOTE]
+> Check if your AWS account already has a GitHub OIDC provider configured: `aws iam list-open-id-connect-providers`. If it's not there, create it once (`token.actions.githubusercontent.com`, audience `sts.amazonaws.com`). The IAM module references it but doesn't create it.
 
 ## DevOps strategy
 
-Each environment (`local`, `dev`, `prod`) has its own least-privileged deploy role, its own state prefix, and its own apply path. All three share the same Makefile interface.
+### Environment model
 
-### Three environments × three concerns
+The project has three deployment environments, all in the same AWS account:
 
-|  | local | dev | prod |
-|---|---|---|---|
-| **Identity** | IAM user assumes `agentic-kie-local-deploy` | OIDC → `agentic-kie-dev-deploy` (trust scoped to `refs/heads/develop` + PRs) | OIDC → `agentic-kie-prod-deploy` (trust scoped to `environment:prod`) |
-| **State** | `service/local/...` in the shared bucket | `service/dev/...` | `service/prod/...` |
-| **Apply path** | `make apply` from your laptop | auto-apply on merge to `develop` | saved-plan apply, manual approval via the `prod` GitHub Environment |
+| Environment | Who deploys | When |
+|---|---|---|
+| `local` | You, from your laptop | Iterating on infrastructure changes |
+| `dev` | GitHub Actions | On merge to `develop` |
+| `prod` | GitHub Actions | On merge to `main`, gated by manual approval |
 
-Trust policies are defined in [`infra/iam/main.tf`](infra/iam/main.tf). Each role can only be assumed by its designated principal. The `deny_other_envs` policy combined with `Environment` resource tagging prevents a role in one environment from modifying resources tagged to another.
+> [!NOTE]
+> Each environment has its own Terraform state file, its own IAM role, and its own set of resources tagged with `Environment=<env>`. The IAM roles are scoped so each one can only touch resources tagged for its own environment.
+
+### Branch model
+
+Two long-lived branches map to the two CI-managed environments: `develop` drives `dev`, `main` drives `prod`. Every change flows through a PR with a plan attached, and prod additionally waits on a manual approval before the saved plan is applied.
+
+```mermaid
+flowchart LR
+    feature[Feature branch] -->|PR| develop[develop]
+    develop -->|CI plans dev| planDev{{Plan dev}}
+    planDev -->|merge| applyDev[CI applies dev]
+
+    develop -->|PR| main[main]
+    main -->|CI plans prod| planProd{{Plan prod}}
+    planProd -->|merge| savedPlan[CI saves plan]
+    savedPlan --> approval[/Manual approval/]
+    approval --> applyProd[CI applies prod]
+```
+
+## First-time setup
+
+You only do it once per AWS account.
+
+### 1. Bootstrap the remote state backend
+
+Creates the S3 bucket that holds Terraform state for all three environments, plus the four `*.backend.tfbackend` config files (one per env, plus one for the IAM bootstrap):
+
+```bash
+make bootstrap
+```
+
+The bucket is private, versioned, encrypted, and uses S3 native locking (`use_lockfile = true`). No DynamoDB table required. The bootstrap script is idempotent.
+
+### 2. Create the IAM roles
+
+The three deploy roles (`local`, `dev`, `prod`) live in a separate Terraform root at `infra/iam/`. They're applied once with admin credentials and rarely touched afterward.
+
+Find your principal ARN with `aws sts get-caller-identity`. Find the bucket name with `aws s3 ls | grep agentic-kie-tfstate`.
+
+Apply:
+
+```bash
+cd infra/iam
+terraform init -backend-config=backend.tfbackend
+terraform plan  -var-file=iam.tfvars
+terraform apply -var-file=iam.tfvars
+
+terraform output
+```
+
+The output gives you three role ARNs. Keep them — you'll paste two into GitHub and one into your AWS config.
+
+### 4. Configure GitHub
+
+In the repo settings:
+
+**Settings → Environments → New environment → `prod`**
+- Add yourself as a required reviewer.
+- This is what gates the prod apply step.
+
+**Settings → Secrets and variables → Actions → Variables (Repository tab)**
+- `AWS_ROLE_ARN_DEV` = `<dev_role_arn>` from the Terraform output
+- `AWS_ROLE_ARN_PROD` = `<prod_role_arn>` from the Terraform output
+
+Variables (not secrets) is correct — role ARNs aren't sensitive on their own.
+
+### 5. Configure your local AWS profile
+
+Add to `~/.aws/config`:
+
+```ini
+[profile agentic-kie-local]
+role_arn       = <local_role_arn>
+source_profile = default
+region         = us-east-1
+```
+
+`source_profile = default` assumes you're already authenticated as your IAM user via `~/.aws/credentials` or SSO. The `agentic-kie-local` profile assumes the local-deploy role on top of that.
+
+Verify:
+
+```bash
+AWS_PROFILE=agentic-kie-local aws sts get-caller-identity
+```
+
+The returned ARN should end in `assumed-role/agentic-kie-local-deploy/...`.
+
+## Day-to-day workflow
+
+### Local iteration
+
+Always set `AWS_PROFILE=agentic-kie-local` (or export it once per shell session).
+
+```bash
+export AWS_PROFILE=agentic-kie-local
+
+make init      # initialize the local backend (idempotent, safe to re-run)
+make plan      # preview changes
+make apply     # apply changes
+make destroy   # tear down all local resources
+```
+
+`make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1` — only CI is allowed to set that.
+
+### Opening a PR
+
+Branch from `develop`, push, open a PR targeting `develop`:
+
+```bash
+git checkout develop
+git pull
+git checkout -b feature/my-change
+# ... edit ...
+git push -u origin feature/my-change
+```
+
+CI runs the dev workflow. Within a minute the PR gets a sticky comment titled **"Terraform Plan · `dev`"** showing what would be applied. Review the plan as part of code review.
+
+Merge the PR. CI applies the changes to dev automatically.
+
+### Promoting to prod
+
+Open a PR from `develop` to `main`. CI posts a sticky **"Terraform Plan · `prod`"** comment. Review and merge.
+
+After the merge:
+
+1. CI runs the `plan` job, generates a saved plan, uploads it as a workflow artifact.
+2. CI queues the `apply` job, which waits at the prod environment approval gate.
+3. You get notified. Open the workflow run, review the plan in the previous job's logs, click "Review deployments" → Approve.
+4. CI applies the saved plan. The exact same bytes that were generated in step 1.
+
+If the plan looks wrong at the approval gate, reject it. Nothing is applied.
+
+### Adding new infrastructure
+
+Most changes are app-level — new modules in `infra/modules/`, wired into `infra/main.tf`. The IAM roles already have `PowerUserAccess`, so they cover almost any AWS service you'd add. The deploy flow is unchanged.
+
+You only need to touch `infra/iam/` when:
+
+- Adding a new IAM-related resource pattern that needs explicit allow (rare).
+- Tightening the permissions policy from `PowerUserAccess` to a service-specific allowlist.
+- Adding a new environment.
+
+## Reference
+
+### Make targets
+
+| Target | Description |
+|---|---|
+| `make bootstrap` | Create state bucket and write backend files (one-time, run once) |
+| `make backend` | Regenerate backend files only, no AWS calls (used by CI and after fresh clone) |
+| `make init` | Initialize Terraform backend for `ENV` |
+| `make plan` | Preview infrastructure changes for `ENV` |
+| `make ci-plan` | Preview changes and save plan to `tfplan.<env>` (used by CI) |
+| `make apply` | Apply infrastructure changes for `ENV` (refuses prod unless `I_KNOW=1`) |
+| `make ci-apply` | Apply saved plan `tfplan.<env>` (used by CI) |
+| `make destroy` | Destroy all infrastructure for `ENV` (refuses prod unless `I_KNOW=1`) |
+| `make format` | Format all Terraform files |
+
+`ENV` defaults to `local`. Override with `make plan ENV=dev` etc.
+
+### Files that are gitignored
+
+- `infra/envs/*.backend.tfbackend` — generated by `make bootstrap` / `make backend`
+- `infra/iam/backend.tfbackend` — same
+- `infra/iam/iam.tfvars` — contains your principal ARN
+- `infra/tfplan.*` — saved plan binaries
+- `plan.txt` — captured plan output for CI comments
+
+
+
+
 
 ### Bootstrap (one-time, with admin credentials)
 
