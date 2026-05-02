@@ -116,10 +116,11 @@ A `deny_other_envs` IAM policy combined with `Environment` resource tagging prev
 > [!IMPORTANT]
 > Requires [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.15 and the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) configured with credentials.
 
-1. Bootstrap the remote state backend and IAM deploy roles (once per AWS account, with admin credentials). See [CONTRIBUTING.md](CONTRIBUTING.md#bootstrap-one-time-with-admin-credentials) for the full procedure:
+1. Bootstrap the remote state backend and IAM deploy roles (once per AWS account, with admin credentials). `make bootstrap` creates the state bucket, writes the backend files, and generates `infra/iam/iam.tfvars` from your current AWS caller identity. `make iam-apply` then creates the three deploy roles. See [CONTRIBUTING.md](CONTRIBUTING.md#bootstrap-one-time-with-admin-credentials) for the full procedure:
 
 ```bash
-make bootstrap
+make bootstrap                    # state bucket + backend files + iam.tfvars
+make iam-init && make iam-apply   # deploy roles (local, dev, prod)
 ```
 
 2. Configure your laptop to assume the `local` deploy role (see [CONTRIBUTING.md](CONTRIBUTING.md#local-role-usage)), then initialize Terraform:
