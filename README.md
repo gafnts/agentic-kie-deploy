@@ -4,6 +4,8 @@
 </p>
 <p align="center">
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
+<a href="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-dev.yml"><img src="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-dev.yml/badge.svg" alt="Deploy dev"></a>
+<a href="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-prod.yml"><img src="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-prod.yml/badge.svg" alt="Deploy prod"></a>
 </p>
 
 ---
@@ -15,9 +17,6 @@
 - [Architecture](#architecture)
 - [Modules](#modules)
   - [Storage](#storage)
-- [Infrastructure](#infrastructure)
-- [Environments & delivery](#environments--delivery)
-- [Getting started](#getting-started)
 - [Contributing](#contributing)
 - [Architecture decisions](docs/adr/README.md)
 
@@ -73,71 +72,6 @@ CORS is configured to allow `PUT` requests from the origins listed in `allowed_u
 
 ---
 
-## Infrastructure
-
-Terraform state is stored remotely in an S3 bucket created by [bootstrap.sh](bootstrap.sh). The bucket is private, versioned, encrypted at rest, and uses S3 native locking (`use_lockfile = true`), so no DynamoDB table is required. A single bucket is shared across environments, with state isolated by prefix (`service/local/`, `service/dev/`, `service/prod/`).
-
-The [Makefile](Makefile) wraps all common Terraform commands. Every target accepts `ENV={local,dev,prod}` (defaults to `local`):
-
-```bash
-make bootstrap         # Create state bucket and write backend files for every env (once per AWS account)
-make init  ENV=dev     # terraform init against the env's backend config
-make plan  ENV=dev     # Preview infrastructure changes
-make apply ENV=dev     # Apply infrastructure changes (refuses prod unless I_KNOW=1)
-make format            # Format all Terraform files
-make destroy ENV=dev   # Destroy infrastructure for the env (refuses prod unless I_KNOW=1)
-```
-
-CI uses two additional targets — `make ci-plan` saves a plan to `tfplan.<env>`, and `make ci-apply` consumes it — so the apply job runs the exact bytes that were reviewed.
-
-> [!IMPORTANT]
-> `infra/envs/*.backend.tfbackend` is gitignored and must never be committed. Run `make bootstrap` (or just `make backend` if the bucket already exists) to regenerate them after a fresh clone.
-
----
-
-## Environments & delivery
-
-The project treats `local`, `dev`, and `prod` as three peers of the same model. Each has its own least-privileged deploy role (defined in [infra/iam/](infra/iam/)), its own state prefix, and its own apply path:
-
-| Env | Identity | Apply path |
-|---|---|---|
-| `local` | IAM user assumes `agentic-kie-local-deploy` | `make apply` from your laptop |
-| `dev` | OIDC → `agentic-kie-dev-deploy` (trust scoped to `develop` + PRs) | Auto-apply on merge to `develop` |
-| `prod` | OIDC → `agentic-kie-prod-deploy` (trust scoped to `environment:prod`) | Saved-plan apply, manual approval via the `prod` GitHub Environment |
-
-Two workflows under [.github/workflows/](.github/workflows/) drive CI: `deploy-dev.yml` posts a plan on PR and auto-applies on merge; `deploy-prod.yml` posts a plan on PR and, on merge, generates a saved plan that is applied only after manual approval.
-
-A `deny_other_envs` IAM policy combined with `Environment` resource tagging prevents a role in one environment from modifying resources tagged to another. See [CONTRIBUTING.md](CONTRIBUTING.md#devops-strategy) for the full strategy and the bootstrap procedure.
-
----
-
-## Getting started
-
-> [!IMPORTANT]
-> Requires [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.15 and the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) configured with credentials.
-
-1. Bootstrap the remote state backend and IAM deploy roles (once per AWS account, with admin credentials). `make bootstrap` creates the state bucket, writes the backend files, and generates `infra/iam/iam.tfvars` from your current AWS caller identity. `make iam-apply` then creates the three deploy roles. See [CONTRIBUTING.md](CONTRIBUTING.md#bootstrap-one-time-with-admin-credentials) for the full procedure:
-
-```bash
-make bootstrap                    # state bucket + backend files + iam.tfvars
-make iam-init && make iam-apply   # deploy roles (local, dev, prod)
-```
-
-2. Configure your laptop to assume the `local` deploy role (see [CONTRIBUTING.md](CONTRIBUTING.md#local-role-usage)), then initialize Terraform:
-
-```bash
-AWS_PROFILE=agentic-kie-local make init
-```
-
-3. Preview and apply:
-
-```bash
-AWS_PROFILE=agentic-kie-local make plan
-AWS_PROFILE=agentic-kie-local make apply
-```
-
----
-
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, available `make` targets, the IAM bootstrap procedure, and the full DevOps strategy.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, the bootstrap and IAM setup procedure, local AWS profile configuration, available `make` targets, and the full DevOps strategy.
