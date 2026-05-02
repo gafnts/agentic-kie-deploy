@@ -3,6 +3,8 @@
   <strong>Serverless, event-driven AWS infrastructure for asynchronous document key-information extraction.</strong>
 </p>
 <p align="center">
+<a href="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-dev.yml"><img src="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-dev.yml/badge.svg" alt="Deploy dev"></a>
+<a href="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-prod.yml"><img src="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-prod.yml/badge.svg" alt="Deploy prod"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
 </p>
 
@@ -15,8 +17,6 @@
 - [Architecture](#architecture)
 - [Modules](#modules)
   - [Storage](#storage)
-- [Infrastructure](#infrastructure)
-- [Getting started](#getting-started)
 - [Contributing](#contributing)
 - [Architecture decisions](docs/adr/README.md)
 
@@ -36,8 +36,6 @@ The pipeline is fully asynchronous. A client calls a small presigner Lambda behi
 | Queue | SQS + DLQ | Buffers events, retries on failure, isolates bad messages |
 | Extractor | Lambda (container image) | Runs the agentic LLM extraction loop |
 | Store | DynamoDB | Holds structured results, keyed by document ID |
-
-Every component scales to zero when idle. Ingress is synchronous and cheap (pre-signed URL handoff). Extraction is fully decoupled and retryable.
 
 ---
 
@@ -70,56 +68,10 @@ EventBridge notifications are enabled on the bucket so object-creation events fl
 CORS is configured to allow `PUT` requests from the origins listed in `allowed_upload_origins`, which is the only method clients need to deposit documents.
 
 > [!NOTE]
-> The bucket currently uses SSE-S3 (AES256), which is appropriate for a portfolio project. For a production workload ingesting PII or regulated documents, the right posture is SSE-KMS with a customer-managed key and S3 Bucket Keys enabled. A CMK adds a second, independent permission gate (`kms:Decrypt` in addition to `s3:GetObject`), full CloudTrail auditability on every decrypt, and a kill switch. The cheapest moment to switch is before any real documents arrive.
-
----
-
-## Infrastructure
-
-Terraform state is stored remotely in an S3 bucket created by [bootstrap.sh](bootstrap.sh). The bucket is private, versioned, encrypted at rest, and uses S3 native locking (`use_lockfile = true`), so no DynamoDB table is required.
-
-The [Makefile](Makefile) wraps all common Terraform commands:
-
-```bash
-make bootstrap   # Create state bucket, write infra/backend.tfbackend (once per environment)
-make init        # terraform init with the generated backend config
-make plan        # Preview infrastructure changes
-make apply       # Apply infrastructure changes
-make format      # Format all Terraform files
-make destroy     # Destroy all infrastructure
-```
-
-> [!IMPORTANT]
-> `infra/backend.tfbackend` is gitignored and must never be committed. Run `make bootstrap` to regenerate it after a fresh clone.
-
----
-
-## Getting started
-
-> [!IMPORTANT]
-> Requires [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.13 and the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) configured with credentials.
-
-1. Bootstrap the remote state backend (once per environment):
-
-```bash
-make bootstrap
-```
-
-2. Initialize Terraform with the generated backend config:
-
-```bash
-make init
-```
-
-3. Preview and apply:
-
-```bash
-make plan
-make apply
-```
+> The bucket currently uses SSE-S3 (AES256). For workloads ingesting PII or regulated documents, SSE-KMS with a customer-managed key and S3 Bucket Keys enabled provides a second permission gate (`kms:Decrypt` in addition to `s3:GetObject`) and full CloudTrail auditability on every decrypt.
 
 ---
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, setup instructions, and available `make` targets.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, the bootstrap and IAM setup procedure, local AWS profile configuration, available `make` targets, and the full DevOps strategy.

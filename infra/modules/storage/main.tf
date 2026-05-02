@@ -1,3 +1,39 @@
+#trivy:ignore:AVD-AWS-0089
+#trivy:ignore:AVD-AWS-0090
+#trivy:ignore:AVD-AWS-0132
+resource "aws_s3_bucket" "ingestion_logs" {
+  bucket        = "${var.bucket_name}-logs"
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_ownership_controls" "ingestion_logs" {
+  bucket = aws_s3_bucket.ingestion_logs.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "ingestion_logs" {
+  bucket = aws_s3_bucket.ingestion_logs.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+#trivy:ignore:AVD-AWS-0132
+resource "aws_s3_bucket_server_side_encryption_configuration" "ingestion_logs" {
+  bucket = aws_s3_bucket.ingestion_logs.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
 resource "aws_s3_bucket" "ingestion" {
   bucket        = var.bucket_name
   force_destroy = true
@@ -20,6 +56,21 @@ resource "aws_s3_bucket_public_access_block" "ingestion" {
   restrict_public_buckets = true
 }
 
+resource "aws_s3_bucket_versioning" "ingestion" {
+  bucket = aws_s3_bucket.ingestion.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_logging" "ingestion" {
+  bucket        = aws_s3_bucket.ingestion.id
+  target_bucket = aws_s3_bucket.ingestion_logs.id
+  target_prefix = "access-logs/"
+}
+
+#trivy:ignore:AVD-AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "ingestion" {
   bucket = aws_s3_bucket.ingestion.id
 
