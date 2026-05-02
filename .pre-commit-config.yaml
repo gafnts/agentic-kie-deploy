@@ -24,12 +24,6 @@ repos:
           - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
       - id: terraform_trivy
         stages: [pre-push]
-      - id: terraform_docs
-        args:
-          - --hook-config=--path-to-file=README.md
-          - --hook-config=--add-to-existing-file=true
-          - --hook-config=--create-file-if-not-exist=true
-        stages: [pre-push]
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
