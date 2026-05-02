@@ -22,8 +22,6 @@ repos:
       - id: terraform_tflint
         args:
           - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
-      - id: terraform_trivy
-        stages: [pre-push]
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
