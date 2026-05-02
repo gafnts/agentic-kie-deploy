@@ -62,6 +62,30 @@ data "aws_iam_policy_document" "trust_prod" {
   }
 }
 
+data "aws_iam_policy_document" "trust_prod_plan" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [local.oidc_provider]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values = [
+        "repo:${var.github_repo}:ref:refs/heads/main",
+        "repo:${var.github_repo}:pull_request",
+      ]
+    }
+  }
+}
+
 data "aws_iam_policy_document" "state_access" {
   for_each = toset(local.envs)
 
@@ -178,4 +202,31 @@ resource "aws_iam_role_policy" "iam_for_lambda" {
   name   = "iam-for-lambda"
   role   = aws_iam_role.deploy[each.key].id
   policy = data.aws_iam_policy_document.iam_for_lambda.json
+}
+
+resource "aws_iam_role" "prod_plan" {
+  name               = "agentic-kie-prod-plan"
+  assume_role_policy = data.aws_iam_policy_document.trust_prod_plan.json
+
+  tags = {
+    Environment = "prod"
+    Role        = "plan"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "prod_plan_readonly" {
+  role       = aws_iam_role.prod_plan.name
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
+resource "aws_iam_role_policy" "prod_plan_state_access" {
+  name   = "tfstate-access"
+  role   = aws_iam_role.prod_plan.id
+  policy = data.aws_iam_policy_document.state_access["prod"].json
+}
+
+resource "aws_iam_role_policy" "prod_plan_deny_other_envs" {
+  name   = "deny-other-envs"
+  role   = aws_iam_role.prod_plan.id
+  policy = data.aws_iam_policy_document.deny_other_envs["prod"].json
 }
