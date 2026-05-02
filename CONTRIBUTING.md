@@ -47,7 +47,7 @@ You only do it once per AWS account.
 
 ### 1. Bootstrap the remote state backend
 
-Creates the S3 bucket that holds Terraform state for all three environments, plus the four `*.backend.tfbackend` config files (one per env, plus one for the IAM bootstrap):
+Creates the S3 bucket that holds Terraform state for all three environments, the four `*.backend.tfbackend` config files (one per env, plus one for the IAM bootstrap), and `infra/iam/iam.tfvars` (gitignored) pre-populated with your caller ARN and bucket name:
 
 ```bash
 make bootstrap
@@ -59,22 +59,13 @@ The bucket is private, versioned, encrypted, and uses S3 native locking (`use_lo
 
 The three deploy roles (`local`, `dev`, `prod`) live in a separate Terraform root at `infra/iam/`. They're applied once with admin credentials and rarely touched afterward.
 
-Find your principal ARN with `aws sts get-caller-identity`. Find the bucket name with `aws s3 ls | grep agentic-kie-tfstate`.
-
-Apply:
-
 ```bash
-cd infra/iam
-terraform init -backend-config=backend.tfbackend
-terraform plan  -var-file=iam.tfvars
-terraform apply -var-file=iam.tfvars
-
-terraform output
+make iam-init && make iam-apply
 ```
 
 The output gives you three role ARNs. Keep them — you'll paste two into GitHub and one into your AWS config.
 
-### 4. Configure GitHub
+### 3. Configure GitHub
 
 In the repo settings:
 
@@ -86,9 +77,9 @@ In the repo settings:
 - `AWS_ROLE_ARN_DEV` = `<dev_role_arn>` from the Terraform output
 - `AWS_ROLE_ARN_PROD` = `<prod_role_arn>` from the Terraform output
 
-Variables (not secrets) is correct — role ARNs aren't sensitive on their own.
+Variables (not secrets) is correct since role ARNs aren't sensitive on their own.
 
-### 5. Configure your local AWS profile
+### 4. Configure your local AWS profile
 
 Add to `~/.aws/config`:
 
