@@ -1,0 +1,153 @@
+name: Deploy · Prod
+
+on:
+  push:
+    branches: [main]
+    paths: ["infra/**", ".github/workflows/deploy-prod.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["infra/**", ".github/workflows/deploy-prod.yml"]
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+env:
+  ENV: prod
+  AWS_REGION: us-east-1
+  TF_VERSION: 1.15.0
+
+jobs:
+  # PR plan: posts a sticky comment so reviewers can see what would land.
+  # Not the plan that gets applied — that one is generated post-merge.
+  plan-pr:
+    name: Plan (PR)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Generate backend file
+        run: make backend
+
+      - run: terraform -chdir=infra fmt -check -recursive
+      - run: make init ENV=${{ env.ENV }}
+
+      - name: Plan
+        id: plan
+        run: make plan ENV=${{ env.ENV }} 2>&1 | tee plan.txt
+        continue-on-error: true
+
+      - name: Capture plan output
+        if: always()
+        id: planfile
+        run: |
+          {
+            echo 'plan<<EOF'
+            head -c 60000 plan.txt
+            echo
+            echo EOF
+          } >> $GITHUB_OUTPUT
+
+      - name: Comment plan
+        if: always()
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: terraform-plan-prod
+          message: |
+            #### Terraform Plan · `prod` ${{ steps.plan.outcome == 'success' && '✅' || '❌' }}
+            <details><summary>Show plan</summary>
+
+            ```
+            ${{ steps.planfile.outputs.plan }}
+            ```
+            </details>
+
+      - if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  # Post-merge plan: generates the saved plan that will be applied.
+  # Uploaded as an artifact so the apply job consumes the same bytes.
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Generate backend file
+        run: make backend
+
+      - run: make init ENV=${{ env.ENV }}
+      - run: make ci-plan ENV=${{ env.ENV }} 2>&1 | tee plan.txt
+
+      - name: Upload saved plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-prod
+          path: |
+            infra/tfplan.prod
+            plan.txt
+          retention-days: 7
+          if-no-files-found: error
+
+  # Apply: gated by the `prod` GitHub Environment (manual approval).
+  # Consumes the saved plan from the plan job — same bytes that were generated.
+  apply:
+    name: Apply
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    needs: plan
+    environment: prod
+    env:
+      I_KNOW: "1"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Generate backend file
+        run: make backend
+
+      - run: make init ENV=${{ env.ENV }}
+
+      - name: Download saved plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-prod
+          path: infra/
+
+      - run: make ci-apply ENV=${{ env.ENV }}

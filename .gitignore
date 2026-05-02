@@ -208,7 +208,8 @@ __marimo__/
 
 # Terraform
 .terraform/
-backend.tfbackend
+infra/tfplan.*
+infra/iam/iam.tfvars
 
 # Data
 static/
