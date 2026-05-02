@@ -61,10 +61,21 @@ state_bucket_name   = "${BUCKET}"
 EOF
 fi
 
+# 7. Write .envrc for direnv (idempotent)
+ENVRC="./.envrc"
+echo ""
+if [ -f "${ENVRC}" ]; then
+  echo "  ${ENVRC} exists, skipping"
+else
+  echo "Writing ${ENVRC}"
+  printf 'export AWS_PROFILE=agentic-kie-local\n' > "${ENVRC}"
+fi
+
 echo ""
 echo "Bootstrap complete."
 echo ""
 echo "Next:"
+echo "  direnv allow                      # Activate .envrc (if using direnv)"
 echo "  make iam-init && make iam-apply   # One-time: create deploy roles"
 echo "  make init                         # Initialize local"
 echo "  make plan && make apply           # Apply local infra"
