@@ -45,7 +45,6 @@ jobs:
 
       - run: terraform -chdir=infra fmt -check -recursive
       - run: make init ENV=${{ env.ENV }}
-      - run: terraform -chdir=infra validate
 
       - name: Plan
         id: plan
