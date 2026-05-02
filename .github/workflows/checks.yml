@@ -16,6 +16,7 @@ concurrency:
 env:
   TF_VERSION: 1.15.0
   TFLINT_VERSION: v0.59.1
+  TRIVY_VERSION: v0.62.1
   PYTHON_VERSION: "3.13"
 
 jobs:
@@ -38,6 +39,11 @@ jobs:
       - uses: terraform-linters/setup-tflint@v5
         with:
           tflint_version: ${{ env.TFLINT_VERSION }}
+
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sudo sh -s -- -b /usr/local/bin ${{ env.TRIVY_VERSION }}
 
       - name: Cache pre-commit environments
         uses: actions/cache@v4
