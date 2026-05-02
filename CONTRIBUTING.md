@@ -7,6 +7,9 @@ This repo contains the Terraform infrastructure for the agentic-kie project, dep
 > - [Terraform](https://developer.hashicorp.com/terraform/install) ~> 1.15.0
 > - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) configured with credentials
 > - [GitHub OIDC provider](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws) configured in your AWS account
+> - [uv](https://docs.astral.sh/uv/) for Python tooling and pre-commit hooks
+> - [tflint](https://github.com/terraform-linters/tflint) for Terraform linting
+> - [Trivy](https://trivy.dev/) for IaC security scanning
 
 > [!NOTE]
 > Check if your AWS account already has a GitHub OIDC provider configured: `aws iam list-open-id-connect-providers`. If it's not there, create it once (`token.actions.githubusercontent.com`, audience `sts.amazonaws.com`). The IAM module references it but doesn't create it.
@@ -17,12 +20,14 @@ This repo contains the Terraform infrastructure for the agentic-kie project, dep
   - [Environment model](#environment-model)
   - [Branch model](#branch-model)
 - [First-time setup](#first-time-setup)
+  - [Install development dependencies and hooks](#install-development-dependencies-and-hooks)
   - [Bootstrap the remote state backend](#bootstrap-the-remote-state-backend)
   - [Create the IAM roles](#create-the-iam-roles)
   - [Configure GitHub](#configure-github)
   - [Configure your local AWS profile](#configure-your-local-aws-profile)
 - [Day-to-day workflow](#day-to-day-workflow)
   - [Local iteration](#local-iteration)
+  - [Quality gates](#quality-gates)
   - [Opening a PR](#opening-a-pr)
   - [Promoting to prod](#promoting-to-prod)
   - [Adding new infrastructure](#adding-new-infrastructure)
@@ -65,9 +70,34 @@ flowchart LR
 
 ## First-time setup
 
-You only do it once per AWS account.
+### Install development dependencies and hooks
+
+Sync Python dependencies, install pre-commit hooks for both `pre-commit` and `pre-push` stages, and install the tflint plugins declared in `.tflint.hcl`:
+
+```bash
+make install
+```
+
+This is idempotent. Re-run it after `git pull` whenever `pyproject.toml`, `.pre-commit-config.yaml`, or `.tflint.hcl` change.
+
+Hooks fire automatically on every git operation:
+
+| Stage | What runs | When |
+|---|---|---|
+| `pre-commit` | `terraform fmt`, `tflint`, `gitleaks`, `actionlint`, `ruff`, `shellcheck`, hygiene checks | On `git commit` |
+| `pre-push` | `terraform validate`, `terraform trivy`, `mypy`, `pytest` | On `git push` |
+
+The split keeps commits fast (sub-second feedback for the common loop) and reserves the slower scanners and validators for push time, before changes are shared.
+
+> [!IMPORTANT]
+> If not already installed in your system, install the following tools first — each links to installation instructions:
+> - [tflint](https://github.com/terraform-linters/tflint#installation)
+> - [gitleaks](https://github.com/gitleaks/gitleaks#installing)
+> - [actionlint](https://github.com/rhysd/actionlint#installation)
 
 ### Bootstrap the remote state backend
+
+You only do it once per AWS account.
 
 Creates the S3 bucket that holds Terraform state for all three environments, the four `*.backend.tfbackend` config files (one per env, plus one for the IAM bootstrap), and `infra/iam/iam.tfvars` (gitignored) pre-populated with your caller ARN and bucket name:
 
@@ -126,22 +156,12 @@ The returned ARN should end in `assumed-role/agentic-kie-local-deploy/...`.
 
 ### Local iteration
 
-`make bootstrap` generates a `.envrc` file at the repo root with `export AWS_PROFILE=agentic-kie-local`. If you have [direnv](https://direnv.net/) installed, run `direnv allow` once and the profile is set automatically whenever you enter the directory:
-
-```bash
-direnv allow
-```
-
-Without direnv, export it manually for the session:
+Always set `AWS_PROFILE=agentic-kie-local` (or export it once per shell session).
 
 ```bash
 export AWS_PROFILE=agentic-kie-local
-```
 
-Then:
-
-```bash
-make init      # Initialize the local backend
+make init      # Initialize the local backend (idempotent, safe to re-run)
 make plan      # Preview changes
 make apply     # Apply changes
 make destroy   # Tear down all local resources
@@ -149,6 +169,23 @@ make destroy   # Tear down all local resources
 
 > [!IMPORTANT]
 > `make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1` — only CI is allowed to set that.
+
+### Quality gates
+
+Hooks run automatically, but you can also invoke them on demand. Useful when you want fast feedback on a single tool, or to run the full suite before pushing.
+
+```bash
+make check     # Run every hook against every file (both stages)
+make format    # Apply ruff lint fixes and formatting to src
+make lint      # Run ruff check on src
+make type      # Run mypy on src
+make test      # Run pytest with coverage
+make tf-format # Format all Terraform files
+```
+
+`make check` is what the CI mirror job runs. If it passes locally, your PR will pass the lint/format/scan stage in CI.
+
+If a hook version in `.pre-commit-config.yaml` is updated, `make install` reinstalls the hook environments. If the tflint plugin version in `.tflint.hcl` changes, run `make tflint-init` (or `make install`) to refresh the plugin cache.
 
 ### Opening a PR
 
@@ -174,7 +211,7 @@ After the merge:
 
 1. CI runs the `plan` job, generates a saved plan, uploads it as a workflow artifact.
 2. CI queues the `apply` job, which waits at the prod environment approval gate.
-3. You get notified:
+3. You get notified.
    - Open the workflow run.
    - Review the plan in the previous job's logs.
    - Click "Review deployments" → Approve.
@@ -198,6 +235,14 @@ You only need to touch `infra/iam/` when:
 
 | Target | Description |
 |---|---|
+| `make install` | Sync deps, install pre-commit hooks (both stages), install tflint plugins |
+| `make tflint-init` | Refresh tflint plugins after a `.tflint.hcl` version bump |
+| `make check` | Run every pre-commit hook against every file (both stages) |
+| `make lint` | Run ruff check on `src` |
+| `make format` | Apply ruff lint fixes and formatting to `src` |
+| `make type` | Run mypy on `src` |
+| `make test` | Run pytest with coverage |
+| `make tf-format` | Format all Terraform files |
 | `make bootstrap` | Create state bucket and write backend files (one-time, run once) |
 | `make backend` | Regenerate backend files only, no AWS calls (used by CI and after fresh clone) |
 | `make iam-init` | Initialize Terraform backend for the IAM bootstrap module |
@@ -209,7 +254,6 @@ You only need to touch `infra/iam/` when:
 | `make apply` | Apply infrastructure changes for `ENV` (refuses prod unless `I_KNOW=1`) |
 | `make ci-apply` | Apply saved plan `tfplan.<env>` (used by CI for prod) |
 | `make destroy` | Destroy all infrastructure for `ENV` (refuses prod unless `I_KNOW=1`) |
-| `make format` | Format all Terraform files |
 
 `ENV` defaults to `local`. Override with `make plan ENV=dev`, etc.
 
@@ -218,7 +262,6 @@ You only need to touch `infra/iam/` when:
 - `.terraform/` — Terraform plugin cache and local state
 - `infra/tfplan.*` — Saved plan binaries
 - `infra/iam/iam.tfvars` — Contains your principal ARN
-- `.envrc` — Generated by `make bootstrap`; sets `AWS_PROFILE=agentic-kie-local` for direnv
 
 ### Design notes
 
