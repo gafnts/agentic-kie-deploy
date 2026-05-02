@@ -62,7 +62,7 @@ jobs:
             head -c 60000 plan.txt
             echo
             echo EOF
-          } >> $GITHUB_OUTPUT
+          } >> "$GITHUB_OUTPUT"
 
       - name: Comment plan
         if: always()
