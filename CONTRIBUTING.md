@@ -1,6 +1,6 @@
 # Contributing
 
-This repo contains the Terraform infrastructure for the agentic-kie project, deployed to AWS across three environments (`local`, `dev`, `prod`). Contributing means authoring Terraform — every change is reviewed via a CI-generated plan before it lands, and prod requires a manual approval gate on top of that.
+This repo contains the Terraform infrastructure for the Agentic KIE project, deployed to AWS across three environments (`local`, `dev`, `prod`). Contributing means authoring Terraform. Infrastructure changes trigger a CI-generated plan on every PR so reviewers can see exactly what would land; production additionally gates the apply on a manual approval against a saved plan generated post-merge.
 
 > [!IMPORTANT]
 > This project requires:
@@ -8,8 +8,6 @@ This repo contains the Terraform infrastructure for the agentic-kie project, dep
 > - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) configured with credentials
 > - [GitHub OIDC provider](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws) configured in your AWS account
 > - [uv](https://docs.astral.sh/uv/) for Python tooling and pre-commit hooks
-> - [tflint](https://github.com/terraform-linters/tflint) for Terraform linting
-> - [Trivy](https://trivy.dev/) for IaC security scanning
 
 > [!NOTE]
 > Check if your AWS account already has a GitHub OIDC provider configured: `aws iam list-open-id-connect-providers`. If it's not there, create it once (`token.actions.githubusercontent.com`, audience `sts.amazonaws.com`). The IAM module references it but doesn't create it.
@@ -68,6 +66,9 @@ flowchart LR
     approval --> applyProd[CI applies prod]
 ```
 
+> [!NOTE]
+> The dev and prod apply jobs are not symmetric. Dev runs `terraform apply` directly against current state at merge time — the PR plan is informational, not the artifact applied. This is intentional: dev is the iteration environment, and the simplification is a reasonable trade-off. Prod is plan-bound: a new plan is generated post-merge, saved as an artifact, and that exact artifact is what gets applied after approval.
+
 ## First-time setup
 
 ### Install development dependencies and hooks
@@ -84,13 +85,14 @@ Hooks fire automatically on every git operation:
 
 | Stage | What runs | When |
 |---|---|---|
-| `pre-commit` | `terraform fmt`, `tflint`, `gitleaks`, `actionlint`, `ruff`, `shellcheck`, hygiene checks | On `git commit` |
+| `pre-commit` | `terraform fmt`, `tflint`, `gitleaks`, `actionlint`, `ruff`, `shellcheck` | On `git commit` |
 | `pre-push` | `terraform validate`, `terraform trivy`, `mypy`, `pytest` | On `git push` |
 
 The split keeps commits fast (sub-second feedback for the common loop) and reserves the slower scanners and validators for push time, before changes are shared.
 
 > [!IMPORTANT]
 > If not already installed in your system, install the following tools first — each links to installation instructions:
+> - [trivy](https://github.com/aquasecurity/trivy)
 > - [tflint](https://github.com/terraform-linters/tflint#installation)
 > - [gitleaks](https://github.com/gitleaks/gitleaks#installing)
 > - [actionlint](https://github.com/rhysd/actionlint#installation)
@@ -127,7 +129,8 @@ In the repo settings:
 
 **Settings → Secrets and variables → Actions → Variables (Repository tab)**
 - `AWS_ROLE_ARN_DEV` = `<dev_role_arn>` from the Terraform output
-- `AWS_ROLE_ARN_PROD` = `<prod_role_arn>` from the Terraform output
+- `AWS_ROLE_ARN_PROD_PLAN` = `<prod_plan_role_arn>` from the Terraform output (read-only; used by plan jobs on PRs and post-merge)
+- `AWS_ROLE_ARN_PROD` = `<prod_role_arn>` from the Terraform output (write; used by the apply job only)
 
 Variables (not secrets) is correct since role ARNs aren't sensitive on their own.
 
