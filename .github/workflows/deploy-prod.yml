@@ -148,6 +148,5 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: tfplan-prod
-          path: infra/
 
       - run: make ci-apply ENV=${{ env.ENV }}
