@@ -20,4 +20,5 @@ module "storage" {
   source                 = "./modules/storage"
   bucket_name            = local.bucket_name
   allowed_upload_origins = var.allowed_upload_origins
+  force_destroy          = var.environment != "prod"
 }

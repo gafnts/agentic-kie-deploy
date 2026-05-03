@@ -3,7 +3,7 @@
 #trivy:ignore:AVD-AWS-0132
 resource "aws_s3_bucket" "ingestion_logs" {
   bucket        = "${var.bucket_name}-logs"
-  force_destroy = true
+  force_destroy = var.force_destroy
 }
 
 resource "aws_s3_bucket_ownership_controls" "ingestion_logs" {
@@ -36,7 +36,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "ingestion_logs" {
 
 resource "aws_s3_bucket" "ingestion" {
   bucket        = var.bucket_name
-  force_destroy = true
+  force_destroy = var.force_destroy
 }
 
 resource "aws_s3_bucket_ownership_controls" "ingestion" {
