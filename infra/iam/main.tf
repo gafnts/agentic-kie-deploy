@@ -62,30 +62,6 @@ data "aws_iam_policy_document" "trust_prod" {
   }
 }
 
-data "aws_iam_policy_document" "trust_prod_plan" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRoleWithWebIdentity"]
-    principals {
-      type        = "Federated"
-      identifiers = [local.oidc_provider]
-    }
-    condition {
-      test     = "StringEquals"
-      variable = "token.actions.githubusercontent.com:aud"
-      values   = ["sts.amazonaws.com"]
-    }
-    condition {
-      test     = "StringLike"
-      variable = "token.actions.githubusercontent.com:sub"
-      values = [
-        "repo:${var.github_repo}:ref:refs/heads/main",
-        "repo:${var.github_repo}:pull_request",
-      ]
-    }
-  }
-}
-
 data "aws_iam_policy_document" "state_access" {
   for_each = toset(local.envs)
 
@@ -202,6 +178,30 @@ resource "aws_iam_role_policy" "iam_for_lambda" {
   name   = "iam-for-lambda"
   role   = aws_iam_role.deploy[each.key].id
   policy = data.aws_iam_policy_document.iam_for_lambda.json
+}
+
+data "aws_iam_policy_document" "trust_prod_plan" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [local.oidc_provider]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values = [
+        "repo:${var.github_repo}:ref:refs/heads/main",
+        "repo:${var.github_repo}:pull_request",
+      ]
+    }
+  }
 }
 
 resource "aws_iam_role" "prod_plan" {
