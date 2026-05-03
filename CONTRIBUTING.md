@@ -66,6 +66,9 @@ flowchart LR
     approval --> applyProd[CI applies prod]
 ```
 
+> [!NOTE]
+> The dev and prod apply jobs are not symmetric. Dev runs `terraform apply` directly against current state at merge time — the PR plan is informational, not the artifact applied. This is intentional: dev is the iteration environment, and the simplification is a reasonable trade-off. Prod is plan-bound: a new plan is generated post-merge, saved as an artifact, and that exact artifact is what gets applied after approval.
+
 ## First-time setup
 
 ### Install development dependencies and hooks
