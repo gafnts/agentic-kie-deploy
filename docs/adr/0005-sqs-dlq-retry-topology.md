@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-05-07)
+Accepted (2026-05-07)
 
 ## Context
 
@@ -63,6 +63,7 @@ Negative:
 Neutral:
 - Switching to SSE-KMS later mirrors the ADR-0004 migration and would happen at the same boundary (real data arriving)
 - Queue depth and DLQ-occupancy CloudWatch alarms (`ApproximateAgeOfOldestMessage` on the main queue, `ApproximateNumberOfMessagesVisible > 0` on the DLQ) are deferred to a later observability ADR; their omission is intentional, not an oversight
+- The EventBridge target has no explicit retry policy or rule-level DLQ; the AWS defaults (24h retry window, 185 attempts) are sufficient for the S3 → SQS hop and overriding them is intentionally deferred
 
 ## Alternatives considered
 
