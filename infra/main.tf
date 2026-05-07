@@ -22,3 +22,9 @@ module "storage" {
   allowed_upload_origins = var.allowed_upload_origins
   force_destroy          = var.environment != "prod"
 }
+
+module "queue" {
+  source             = "./modules/queue"
+  name               = "${var.project_name}-${var.environment}-extraction"
+  source_bucket_name = module.storage.bucket_name
+}
