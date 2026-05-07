@@ -40,6 +40,9 @@ Two further hardening decisions, applied to both queues:
 - **Resource policy with `aws:SourceArn` condition.** The queue policy grants `sqs:SendMessage` to `events.amazonaws.com`, scoped to the EventBridge rule's ARN. Without this scoping the rule attaches successfully but messages silently fail to land — a footgun worth recording as an explicit decision rather than a code-only convention.
 - **`DenyInsecureTransport`.** Both the main queue and the DLQ deny any `sqs:*` action over non-TLS connections, mirroring the bucket policy from ADR-0003 so the transport-layer posture is uniform across the pipeline.
 
+> [!NOTE]
+> A note on what "Standard throughput" buys and does not buy: SQS Standard imposes no practical TPS ceiling on the queue itself, so the queue will not be the bottleneck during an ingestion burst. Parallelism on the consumer side is governed by the **Lambda event source mapping** — concurrent invocations scale up to 300 per minute against backlog, and each invocation processes a batch of messages. This means the cost-bounding lever for "how many LLM calls run in parallel" lives on the event source mapping (`maximum_concurrency`, `batch_size`), not on the queue. That decision belongs to the extractor module's ADR; this ADR records only that the queue intentionally does not constrain it.
+
 [^1]: AWS recommends setting visibility timeout to at least six times the consumer's processing time (see *Amazon SQS visibility timeout* documentation).
 
 ## Consequences
@@ -55,6 +58,7 @@ Negative:
 - Standard SQS allows occasional duplicate delivery; the extractor must remain idempotent at the `doc_id` level (to be enforced by the DynamoDB write in a later ADR)
 - `maxReceiveCount = 3` is a guess for the transient-vs-permanent failure boundary; if real traffic shows transient LLM failures clustering above 3, the value will need tuning
 - Manual DLQ redrive means a human is in the loop for any persistent failure — acceptable at portfolio scale, would need automation under real traffic
+- Because the queue does not constrain consumer parallelism, an unbounded ingestion burst translates directly into unbounded parallel LLM invocations and cost. The extractor module must set `maximum_concurrency` on its event source mapping to bound this; without it, a single 10,000-document upload would spin up Lambdas as fast as the 300/min scaling rate allows and bill the corresponding LLM calls in parallel
 
 Neutral:
 - Switching to SSE-KMS later mirrors the ADR-0004 migration and would happen at the same boundary (real data arriving)
