@@ -101,3 +101,6 @@ jobs:
 
       - run: make init ENV=${{ env.ENV }}
       - run: terraform -chdir=infra apply -auto-approve -var-file=envs/${{ env.ENV }}.tfvars
+
+      - name: Smoke test
+        run: make smoke

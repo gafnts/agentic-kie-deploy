@@ -9,7 +9,7 @@ IAM_TF      := terraform -chdir=infra/iam
 IAM_VARS    := -var-file=iam.tfvars
 IAM_BACKEND := -backend-config=backend.tfbackend
 
-.PHONY: help install tflint-init check lint format type test \
+.PHONY: help install tflint-init check lint format type test smoke \
         bootstrap backend \
         iam-init iam-plan iam-apply \
         init plan ci-plan apply ci-apply destroy tf-format lock
@@ -49,6 +49,9 @@ type: ## Run mypy on src
 
 test: ## Run pytest with coverage
 	uv run pytest --cov --cov-report=term-missing
+
+smoke: ## Run end-to-end smoke tests against the deployed ENV (requires terraform outputs)
+	@bash tests/queue.sh
 
 
 # STATE BACKEND BOOTSTRAP

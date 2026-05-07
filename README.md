@@ -17,6 +17,7 @@
 - [Architecture](#architecture)
 - [Modules](#modules)
   - [Storage](#storage)
+  - [Queue](#queue)
 - [Contributing](#contributing)
 - [Architecture decisions](docs/adr/README.md)
 
@@ -46,7 +47,7 @@ The infrastructure is organized as small, per-concern Terraform modules wired to
 | Module | Path | Status |
 |---|---|---|
 | `storage` | [infra/modules/storage/](infra/modules/storage/) | Implemented |
-| `queue` | [infra/modules/queue/](infra/modules/queue/) | Planned |
+| `queue` | [infra/modules/queue/](infra/modules/queue/) | Implemented |
 | `table` | [infra/modules/table/](infra/modules/table/) | Planned |
 | `registry` | [infra/modules/registry/](infra/modules/registry/) | Planned |
 | `extractor` | [infra/modules/extractor/](infra/modules/extractor/) | Planned |
@@ -69,6 +70,24 @@ CORS is configured to allow `PUT` requests from the origins listed in `allowed_u
 
 > [!NOTE]
 > The bucket currently uses SSE-S3 (AES256). For workloads ingesting PII or regulated documents, SSE-KMS with a customer-managed key and S3 Bucket Keys enabled provides a second permission gate (`kms:Decrypt` in addition to `s3:GetObject`) and full CloudTrail auditability on every decrypt.
+
+### Queue
+
+The extraction queue sits between the ingestion bucket and the extractor Lambda. An EventBridge rule scoped to the bucket forwards `Object Created` events to a Standard SQS queue, which triggers the extractor. Failed messages are moved to a dead-letter queue after a bounded number of retries so a single poison-pill document cannot burn LLM cost indefinitely.
+
+| Lever | Value | What it controls |
+|---|---|---|
+| Visibility timeout | `6 × lambda_timeout_seconds` (computed) | Hides an in-flight message long enough to cover the worst-case extractor run plus handoff jitter, eliminating the most common SQS+Lambda misconfiguration |
+| `maxReceiveCount` | 3 | Bounds retries on transient failures before the message is shunted to the DLQ |
+| Long polling | `receive_wait_time_seconds = 20` | Reduces empty receives and smooths Lambda triggering at no extra cost |
+| TLS-only policy | Deny on `aws:SecureTransport = false` (main + DLQ) | Mirrors the bucket's transport posture across the pipeline |
+| Source-scoped send | `aws:SourceArn` condition on `events.amazonaws.com` | Closes the confused-deputy class of misconfigurations on the EventBridge → SQS hop |
+| Encryption | SSE-SQS (AWS-managed, main + DLQ) | Protects messages at rest without the operational cost of KMS |
+
+The queue does not constrain consumer parallelism; bounding the number of concurrent LLM invocations is the extractor module's job (`maximum_concurrency` on the event source mapping).
+
+> [!NOTE]
+> The visibility timeout is derived from `lambda_timeout_seconds` inside the module so the two values cannot drift. Until the extractor module exists, the input has a placeholder default; the extractor module will pass its own timeout through and that default will be removed.
 
 ---
 

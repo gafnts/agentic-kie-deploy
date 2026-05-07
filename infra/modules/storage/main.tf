@@ -62,6 +62,37 @@ resource "aws_s3_bucket_cors_configuration" "ingestion" {
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "ingestion" {
+  bucket = aws_s3_bucket.ingestion.id
+
+  rule {
+    id     = "transition-and-expire"
+    status = "Enabled"
+
+    transition {
+      days          = 30
+      storage_class = "STANDARD_IA"
+    }
+
+    transition {
+      days          = 90
+      storage_class = "GLACIER_IR"
+    }
+
+    expiration {
+      days = 365
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
 data "aws_iam_policy_document" "ingestion_tls_only" {
   statement {
     sid     = "DenyInsecureTransport"
@@ -122,6 +153,23 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "ingestion_logs" {
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "ingestion_logs" {
+  bucket = aws_s3_bucket.ingestion_logs.id
+
+  rule {
+    id     = "expire-logs"
+    status = "Enabled"
+
+    expiration {
+      days = 90
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
     }
   }
 }
