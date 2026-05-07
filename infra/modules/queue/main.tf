@@ -4,14 +4,14 @@ locals {
 
 resource "aws_sqs_queue" "extraction_dlq" {
   name                      = "${var.name}-dlq"
-  message_retention_seconds = 1209600
+  message_retention_seconds = 1209600 # 14 days
   sqs_managed_sse_enabled   = true
 }
 
 resource "aws_sqs_queue" "extraction" {
   name                       = var.name
   visibility_timeout_seconds = local.visibility_timeout_seconds
-  message_retention_seconds  = 345600
+  message_retention_seconds  = 345600 # 4 days
   receive_wait_time_seconds  = 20
   sqs_managed_sse_enabled    = true
 
