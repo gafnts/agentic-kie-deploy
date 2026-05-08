@@ -213,3 +213,5 @@ infra/iam/iam.tfvars
 
 # Data
 static/
+
+.DS_Store
