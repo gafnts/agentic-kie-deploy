@@ -6,20 +6,7 @@ Proposed (2026-05-08)
 
 ## Context
 
-Several modules need a stable identifier for each ingested document:
-
-- The **presigner** must hand the client something it can later use to look up results.
-- The **extractor** must write its output keyed by that identifier.
-- The **table** uses it as the partition key.
-- A **future polling endpoint** will read by it.
-
-For these to interoperate, one component must mint the ID, and the others must agree on how to recover it. Three candidates exist:
-
-1. **Client-supplied ID** — the client invents an identifier and sends it with the presign request. Rejected: collisions, no server-side control, and a malicious client could deliberately reuse another tenant's ID to overwrite or shadow their document.
-2. **Extractor-generated ID** — the extractor mints an ID when it processes the SQS message. Rejected: the client never learns the ID, so it cannot poll for results. Adding a callback channel to surface the ID re-introduces the synchronous coupling the pipeline was designed to avoid (see ADR-0001).
-3. **Presigner-generated ID** — the presigner mints the ID and returns it alongside the upload URL. The ID is embedded in the S3 object key, which the presigned URL pins. From there the existing event plumbing (S3 → EventBridge → SQS → extractor → DynamoDB) already carries the key end to end, so no additional propagation channel is needed.
-
-Option 3 is the only one that places ID generation under server control while still letting the client know the ID at upload time.
+Several modules need a stable identifier for each ingested document. One component must mint it and return it to the client before the upload, while the rest of the pipeline must be able to recover it without an extra channel.
 
 ## Decision
 
