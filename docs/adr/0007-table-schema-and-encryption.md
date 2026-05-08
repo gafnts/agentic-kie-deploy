@@ -12,6 +12,8 @@ The `table` module is the system of record for extraction results. Four decision
 
 `document_id` (UUIDv7, fixed in ADR-0006) is the only identifier callers ever need. There is at most one canonical extraction per document, and the polling endpoint reads by `GetItem(document_id)`. A sort key would only earn its place if we kept extraction history (e.g. one row per re-run), and that is not a current requirement.
 
+The PK choice is also load-bearing for idempotency. Because `document_id` is minted once at presign (ADR-0006), every SQS redelivery of the same upload event resolves to the same partition key. Without that, no amount of conditional writes in the extractor would help — retries would simply land on different rows.
+
 ### What goes inside an item
 
 `agentic-kie` today produces small, bounded JSON — a handful of fields, sub-entities, optional nulls. A realistic near-term expansion adds per-field confidence scores and processing metadata (model version, token usage, timing, status). All of that is bounded by *schema complexity*, which is developer-controlled and stays well under 10 KB.
@@ -73,7 +75,9 @@ Explicitly **not** in the table:
 - The agent trace — emitted as structured CloudWatch logs keyed by `document_id`, migrated to Langfuse/Phoenix when the agent grows non-trivial.
 - The source document bytes — already in the ingestion bucket.
 
-Idempotency is the extractor's responsibility (conditional `PutItem` or status-state-machine `UpdateItem`), not enforced by the schema. The table module documents this expectation in its README.
+### Idempotency
+
+Idempotency is a shared responsibility split across the schema and the extractor. The schema's half is ensuring retries land on the same row: `document_id` is minted once at presign (ADR-0006), so the partition key is stable across SQS redeliveries, and the absence of a sort key means there is exactly one row per document for a conditional write to target. The extractor's half is ensuring retries do not clobber later state: a conditional `PutItem` (`attribute_not_exists(document_id)`) on first write, and status-state-machine `UpdateItem` for transitions, so a redelivered message cannot overwrite a terminal `succeeded` or `failed` row. Both halves must hold; the table module's README documents the schema half and points at the extractor module for the operation half.
 
 ### Encryption
 
@@ -137,6 +141,7 @@ Disabled. Re-evaluate when a concrete change-driven consumer (webhook, analytics
 Positive:
 
 - Predictable, single-digit-KB items. Polling stays single-GetItem and cheap regardless of document length.
+- The PK is a deliberate contributor to idempotency, not an incidental choice — pairing it with the extractor's conditional writes gives end-to-end exactly-once semantics on top of at-least-once delivery.
 - The extractor's write path is one DDB call, no dual-write coordination with S3.
 - Encryption posture is consistent with the storage module's, and the migration story to CMKs is symmetric.
 - Streams remain a free option to enable later without a table rebuild.
