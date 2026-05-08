@@ -23,3 +23,5 @@ This directory records the significant architectural decisions made in this proj
 | [0003](0003-four-layer-bucket-hardening.md) | Four-layer ingestion bucket hardening | Accepted |
 | [0004](0004-sse-s3-over-sse-kms.md) | Use SSE-S3 over SSE-KMS for ingestion bucket encryption | Accepted |
 | [0005](0005-sqs-dlq-retry-topology.md) | Standard SQS with DLQ-backed retry for the extraction queue | Accepted |
+| [0006](0006-document-id-lifecycle.md) | Server-generated document ID, carried by the S3 object key | Accepted |
+| [0007](0007-table-schema-and-encryption.md) | Table schema, bounded item size, and encryption posture | Accepted |

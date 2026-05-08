@@ -17,3 +17,11 @@ output "extraction_queue_arn" {
 output "extraction_dlq_arn" {
   value = module.queue.dlq_arn
 }
+
+output "results_table_name" {
+  value = module.table.table_name
+}
+
+output "results_table_arn" {
+  value = module.table.table_arn
+}

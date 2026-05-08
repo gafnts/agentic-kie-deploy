@@ -18,6 +18,7 @@
 - [Modules](#modules)
   - [Storage](#storage)
   - [Queue](#queue)
+  - [Table](#table)
 - [Contributing](#contributing)
 - [Architecture decisions](docs/adr/README.md)
 
@@ -48,7 +49,7 @@ The infrastructure is organized as small, per-concern Terraform modules wired to
 |---|---|---|
 | `storage` | [infra/modules/storage/](infra/modules/storage/) | Implemented |
 | `queue` | [infra/modules/queue/](infra/modules/queue/) | Implemented |
-| `table` | [infra/modules/table/](infra/modules/table/) | Planned |
+| `table` | [infra/modules/table/](infra/modules/table/) | Implemented |
 | `registry` | [infra/modules/registry/](infra/modules/registry/) | Planned |
 | `extractor` | [infra/modules/extractor/](infra/modules/extractor/) | Planned |
 | `uploader` | [infra/modules/uploader/](infra/modules/uploader/) | Planned |
@@ -88,6 +89,26 @@ The queue does not constrain consumer parallelism; bounding the number of concur
 
 > [!NOTE]
 > The visibility timeout is derived from `lambda_timeout_seconds` inside the module so the two values cannot drift. Until the extractor module exists, the input has a placeholder default; the extractor module will pass its own timeout through and that default will be removed.
+
+### Table
+
+The results table is the system of record for extractions. The extractor writes one item per document keyed by `document_id` (UUIDv7, minted once at presign), and the polling endpoint reads it back with a single `GetItem`. Holding only the bounded answer (status, structured fields, confidences, model and timing metadata) keeps items in the single-digit-KB range, which keeps polling cheap and stays well clear of DynamoDB's 400 KB item cap. The OCR'd text and the agent trace deliberately live elsewhere (S3 and the observability backend, respectively); see [ADR-0007](docs/adr/0007-table-schema-and-encryption.md) for the full schema contract.
+
+| Lever | Value | What it controls |
+|---|---|---|
+| Partition key | `document_id` (UUIDv7) | Stable across SQS redeliveries, so retries land on the same row and conditional writes can enforce idempotency |
+| Sort key | None | One canonical row per document; extraction history is not a current requirement |
+| Billing mode | `PAY_PER_REQUEST` | No capacity planning at portfolio scale; absorbs bursts without throttling |
+| Encryption | SSE with AWS-managed KMS key (`aws/dynamodb`) | Free in DynamoDB, adds basic CloudTrail visibility on the encryption context, parity with the storage module's posture |
+| Point-in-time recovery | Enabled in both `dev` and `prod` | Cheap insurance against accidental writes or deletes; keeps environments configuration-symmetric |
+| TTL | Enabled on `ttl` attribute (unused at MVP) | Retention knob available without a future migration |
+| Deletion protection | `prod` only | Prod is protected from accidental destroy; `dev` stays destroyable so `make destroy` works in the iteration loop |
+| Streams | Disabled | No change-driven consumer today; enabling later is non-breaking |
+
+Idempotency is split between this module and the (future) extractor: the schema's job is to make retries collide on the same partition key, and the extractor's job is to use conditional writes so a redelivered message cannot clobber a terminal row.
+
+> [!NOTE]
+> The table uses the AWS-managed KMS key, not a customer-managed key. For workloads ingesting real PII (names, dates, jurisdictions in extracted fields), switch to a CMK before real data arrives. DynamoDB re-encrypts items in place when the key changes, so the migration is operational rather than a copy job; the IAM consequence (`kms:Decrypt` and `kms:GenerateDataKey` on every reader and writer) mirrors the bucket-side migration sketched in ADR-0004.
 
 ---
 

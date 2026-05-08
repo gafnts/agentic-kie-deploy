@@ -28,3 +28,9 @@ module "queue" {
   name               = "${var.project_name}-${var.environment}-extraction"
   source_bucket_name = module.storage.bucket_name
 }
+
+module "table" {
+  source                      = "./modules/table"
+  table_name                  = "${var.project_name}-${var.environment}-results"
+  deletion_protection_enabled = var.environment == "prod"
+}
