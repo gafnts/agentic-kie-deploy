@@ -12,7 +12,8 @@ IAM_BACKEND := -backend-config=backend.tfbackend
 .PHONY: help install tflint-init check lint format type test smoke \
         bootstrap backend \
         iam-init iam-plan iam-apply \
-        init plan ci-plan apply ci-apply destroy tf-format lock
+        init plan ci-plan apply ci-apply destroy tf-format lock \
+        _check-backend
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -86,20 +87,37 @@ plan: ## Preview infrastructure changes for ENV
 ci-plan: ## Preview changes and save plan to tfplan.ENV (used by CI)
 	$(TF) plan -out=tfplan.$(ENV) $(VARS)
 
-apply: ## Apply infrastructure changes for ENV (refuses prod unless I_KNOW=1)
+apply: _check-backend ## Apply infrastructure changes for ENV (refuses prod unless I_KNOW=1)
 	@if [ "$(ENV)" = "prod" ] && [ "$(I_KNOW)" != "1" ]; then \
 		echo "Refusing to apply prod from local. CI owns prod."; exit 1; fi
 	$(TF) apply $(VARS)
 
-ci-apply: ## Apply saved plan tfplan.ENV (used by CI; refuses prod unless I_KNOW=1)
+ci-apply: _check-backend ## Apply saved plan tfplan.ENV (used by CI; refuses prod unless I_KNOW=1)
 	@if [ "$(ENV)" = "prod" ] && [ "$(I_KNOW)" != "1" ]; then \
 		echo "Refusing to apply prod from local. CI owns prod."; exit 1; fi
 	$(TF) apply tfplan.$(ENV)
 
-destroy: ## Destroy all infrastructure for ENV (refuses prod unless I_KNOW=1)
+destroy: _check-backend ## Destroy all infrastructure for ENV (requires explicit ENV; refuses prod unless I_KNOW=1)
+	@if [ "$(origin ENV)" != "command line" ] && [ "$(origin ENV)" != "environment" ]; then \
+		echo "destroy requires explicit ENV (e.g. make destroy ENV=local). Refusing default."; exit 1; fi
 	@if [ "$(ENV)" = "prod" ] && [ "$(I_KNOW)" != "1" ]; then \
 		echo "Refusing to destroy prod. Re-run with I_KNOW=1."; exit 1; fi
 	$(TF) destroy $(VARS)
+
+# Verify the configured backend key matches ENV. Prevents the footgun where
+# `make init ENV=prod` followed by `make destroy` (defaulting to local)
+# operates on the prod state because the backend pointer persists in
+# infra/.terraform/terraform.tfstate across runs.
+_check-backend:
+	@if [ ! -f infra/.terraform/terraform.tfstate ]; then \
+		echo "Terraform not initialized. Run 'make init ENV=$(ENV)' first."; exit 1; fi
+	@current=$$(grep -o '"key": *"[^"]*"' infra/.terraform/terraform.tfstate | head -1 | sed 's/.*"\([^"]*\)"$$/\1/'); \
+	expected="service/$(ENV)/terraform.tfstate"; \
+	if [ "$$current" != "$$expected" ]; then \
+		echo "Backend mismatch: configured key is '$$current' but ENV=$(ENV) expects '$$expected'."; \
+		echo "Run 'make init ENV=<env>' to reconfigure the backend before continuing."; \
+		exit 1; \
+	fi
 
 tf-format: ## Format all Terraform files
 	$(TF) fmt -recursive
