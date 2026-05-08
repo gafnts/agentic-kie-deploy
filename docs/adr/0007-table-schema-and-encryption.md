@@ -100,7 +100,7 @@ resource "aws_dynamodb_table" "results" {
   }
 
   point_in_time_recovery {
-    enabled = var.environment == "prod"
+    enabled = true
   }
 
   ttl {
@@ -111,6 +111,8 @@ resource "aws_dynamodb_table" "results" {
   deletion_protection_enabled = var.environment == "prod"
 }
 ```
+
+PITR is enabled in both environments. The aim is to keep the table's configuration near-identical across `dev` and `prod` — divergence between environments is itself a source of surprise — and PITR's cost is negligible against a portfolio-scale workload. Deletion protection stays prod-only because it would block `terraform destroy`, which is part of the dev iteration loop (`make destroy`).
 
 If this project moves beyond the portfolio stage and begins ingesting real PII, switch to a CMK before real data arrives. The shape of that change:
 
