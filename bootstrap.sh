@@ -4,10 +4,11 @@ set -euo pipefail
 AWS_REGION="${AWS_REGION:-us-east-1}"
 PROJECT="agentic-kie"
 
-_SUFFIX=$(echo -n "${PROJECT}" | openssl dgst -sha256 | awk '{print $2}' | cut -c1-8)
-BUCKET="${PROJECT}-tfstate-${_SUFFIX}"
+SUFFIX=$(echo -n "${PROJECT}" | openssl dgst -sha256 | awk '{print $2}' | cut -c1-8)
+BUCKET="${PROJECT}-tfstate-${SUFFIX}"
 
 # 1. Create the state bucket (idempotent, shared across envs)
+echo ""
 echo "Creating S3 bucket: ${BUCKET}"
 if aws s3api head-bucket --bucket "${BUCKET}" 2>/dev/null; then
   echo "  bucket already exists, skipping"
@@ -23,12 +24,14 @@ else
 fi
 
 # 2. Versioning
+echo ""
 echo "Enabling versioning"
 aws s3api put-bucket-versioning \
   --bucket "${BUCKET}" \
   --versioning-configuration Status=Enabled
 
 # 3. Block public access
+echo ""
 echo "Blocking public access"
 aws s3api put-public-access-block \
   --bucket "${BUCKET}" \
@@ -36,6 +39,7 @@ aws s3api put-public-access-block \
     "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
 
 # 4. Default encryption
+echo ""
 echo "Enabling encryption"
 aws s3api put-bucket-encryption \
   --bucket "${BUCKET}" \
@@ -75,9 +79,8 @@ echo ""
 echo "Bootstrap complete."
 echo ""
 echo "Next:"
-echo "  direnv allow                      # Activate .envrc (if using direnv)"
-echo "  make iam-init && make iam-apply   # One-time: create deploy roles"
-echo "  make init                         # Initialize local"
-echo "  make plan && make apply           # Apply local infra"
+echo "  direnv allow               # Activate .envrc (if using direnv)"
+echo "  make provision             # One-time: create IAM roles, ECR registry, and init"
+echo "  make plan && make apply    # Apply local infra"
 echo ""
 echo "Dev and prod are initialized and applied by CI on push."

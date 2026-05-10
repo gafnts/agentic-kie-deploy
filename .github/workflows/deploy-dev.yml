@@ -3,10 +3,10 @@ name: Deploy · Dev
 on:
   push:
     branches: [develop]
-    paths: ["infra/**", ".github/workflows/deploy-dev.yml"]
+    paths: ["infra/**", "src/extractor/**", ".github/workflows/deploy-dev.yml"]
   pull_request:
     branches: [develop]
-    paths: ["infra/**", ".github/workflows/deploy-dev.yml"]
+    paths: ["infra/**", "src/extractor/**", ".github/workflows/deploy-dev.yml"]
 
 permissions:
   id-token: write
@@ -79,10 +79,61 @@ jobs:
       - if: steps.plan.outcome == 'failure'
         run: exit 1
 
+  build-and-push:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    outputs:
+      image_digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Detect extractor changes
+        uses: dorny/paths-filter@v4
+        id: changes
+        with:
+          filters: |
+            extractor:
+              - 'src/extractor/**'
+
+      - name: Configure AWS credentials
+        if: steps.changes.outputs.extractor == 'true'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        if: steps.changes.outputs.extractor == 'true'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push
+        if: steps.changes.outputs.extractor == 'true'
+        id: push
+        env:
+          REPOSITORY: agentic-kie-deploy-${{ env.ENV }}-extractor
+        run: |
+          IMAGE_TAG=$(git rev-parse --short HEAD)
+          REPO_URL=$(aws ecr describe-repositories \
+            --repository-names "$REPOSITORY" \
+            --query 'repositories[0].repositoryUri' \
+            --output text)
+          docker build -t "$REPO_URL:$IMAGE_TAG" src/extractor/
+          docker push "$REPO_URL:$IMAGE_TAG"
+          DIGEST=$(aws ecr describe-images \
+            --repository-name "$REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+  # Once the extractor module exists, add -var=extractor_image_digest to the
+  # apply step using needs.build-and-push.outputs.image_digest.
   apply:
     name: Apply
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
+    needs: build-and-push
     steps:
       - uses: actions/checkout@v6
 
@@ -100,7 +151,9 @@ jobs:
         run: make backend
 
       - run: make init ENV=${{ env.ENV }}
-      - run: terraform -chdir=infra apply -auto-approve -var-file=envs/${{ env.ENV }}.tfvars
+
+      - name: Apply
+        run: terraform -chdir=infra apply -auto-approve -var-file=envs/${{ env.ENV }}.tfvars
 
       - name: Smoke test
         run: make smoke
