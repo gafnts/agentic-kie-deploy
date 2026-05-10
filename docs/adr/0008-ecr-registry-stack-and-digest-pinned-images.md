@@ -2,11 +2,11 @@
 
 ## Status
 
-Proposed (2026-05-09)
+Accepted (2026-05-09)
 
 ## Context
 
-ADR-0001 fixed the extractor as a container Lambda packaged from ECR, on the grounds that `agentic-kie`'s ML and LLM dependencies do not fit comfortably under Lambda's zipped layer limits. That decision delegated the registry to a future module; this ADR settles its shape and — equally important — the deployment choreography that hangs off it.
+ADR-0001 fixed the extractor as a container Lambda packaged from ECR, on the grounds that `agentic-kie-deploy`'s ML and LLM dependencies do not fit comfortably under Lambda's zipped layer limits. That decision delegated the registry to a future module; this ADR settles its shape and — equally important — the deployment choreography that hangs off it.
 
 Five concerns drive the design and they are coupled enough that one ADR is clearer than five:
 
@@ -43,7 +43,7 @@ A "keep last 10 tagged + expire untagged after 1 day" policy bounds steady-state
 
 ECR offers two scanning modes. Basic scan-on-push runs an AWS-native CVE scan once per push, free, with findings exposed on the ECR console and as EventBridge events. Enhanced scanning via Inspector rescans continuously and covers OS plus language packages, but it is configured at the account/region level (one config governs the entire registry) and bills per image.
 
-Scan-on-push is per-repository, fits cleanly inside the registry module, and gives a CVE signal at the moment a build lands. Enhanced is the right answer at production scale and the upgrade path is non-breaking — turn it on later via `aws_ecr_registry_scanning_configuration` with a `repository_filter` of `agentic-kie-*`.
+Scan-on-push is per-repository, fits cleanly inside the registry module, and gives a CVE signal at the moment a build lands. Enhanced is the right answer at production scale and the upgrade path is non-breaking — turn it on later via `aws_ecr_registry_scanning_configuration` with a `repository_filter` of `agentic-kie-deploy-*`.
 
 ### Encryption and repository policy
 
@@ -62,7 +62,7 @@ infra/registry/
   main.tf
   variables.tf
   outputs.tf
-  terraform.tf            # backend config, providers
+  terraform.tf
   envs/
     local.backend.tfbackend
     dev.backend.tfbackend
@@ -74,13 +74,13 @@ infra/registry/
 
 State key per environment: `service/${env}/registry.tfstate`, sibling to `service/${env}/terraform.tfstate`. The stack is per-environment (unlike `iam/`, which is account-global) because ECR repositories are regional and the `Environment` tag-deny IAM guard requires per-env tagging.
 
-The main service stack consumes the repository by name via a `data "aws_ecr_repository"` lookup, not via remote state. Coupling on the repository name (`agentic-kie-${env}-extractor`) keeps the stacks loosely connected: deleting and recreating the registry stack does not require a `terraform_remote_state` plumbing change in the service stack.
+The main service stack consumes the repository by name via a `data "aws_ecr_repository"` lookup, not via remote state. Coupling on the repository name (`agentic-kie-deploy-${env}-extractor`) keeps the stacks loosely connected: deleting and recreating the registry stack does not require a `terraform_remote_state` plumbing change in the service stack.
 
 ### Repository
 
 ```hcl
 resource "aws_ecr_repository" "extractor" {
-  name                 = "agentic-kie-${var.environment}-extractor"
+  name                 = "agentic-kie-deploy-${var.environment}-extractor"
   image_tag_mutability = "IMMUTABLE"
   force_delete         = var.environment != "prod"
 
@@ -148,7 +148,7 @@ data "aws_iam_policy_document" "extractor" {
       test     = "ArnLike"
       variable = "aws:SourceArn"
       values = [
-        "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:agentic-kie-${var.environment}-extractor",
+        "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:agentic-kie-deploy-${var.environment}-extractor",
       ]
     }
   }
@@ -192,12 +192,13 @@ The dev role's `PowerUserAccess` already covers `ecr:*`, so no IAM change is nee
 The Makefile gains a parallel set to the existing IAM targets:
 
 ```
-registry-init   ## Initialize Terraform backend for the registry stack
-registry-plan   ## Preview changes to the registry stack
-registry-apply  ## Apply the registry stack for ENV
+registry-init     ## Initialize Terraform backend for the registry stack
+registry-plan     ## Preview changes to the registry stack
+registry-apply    ## Apply the registry stack for ENV
+registry-destroy  ## Destroy the registry stack for ENV (requires explicit ENV; refuses prod unless I_KNOW=1)
 ```
 
-`make destroy` for the service stack does not touch the registry; tearing down a registry is a deliberate, separate `terraform -chdir=infra/registry destroy`.
+`make destroy` for the service stack does not touch the registry. `registry-destroy` is a separate, explicit target — carrying the same guards as `destroy` (explicit `ENV` required, prod blocked unless `I_KNOW=1`, backend-mismatch check) so the raw `terraform -chdir=infra/registry destroy` command, which bypasses those guards, is never the intended path.
 
 ### Module responsibilities
 
@@ -227,7 +228,7 @@ Negative:
 
 Neutral:
 
-- Scan-on-push catches CVEs known at push time but not those disclosed afterward. Acceptable at portfolio scale; the upgrade path to Inspector enhanced scanning is account-wide configuration plus a `repository_filter` of `agentic-kie-*` and is non-breaking.
+- Scan-on-push catches CVEs known at push time but not those disclosed afterward. Acceptable at portfolio scale; the upgrade path to Inspector enhanced scanning is account-wide configuration plus a `repository_filter` of `agentic-kie-deploy-*` and is non-breaking.
 - AES256 over a CMK is the same posture as ADR-0004 and ADR-0007 and migrates the same way.
 
 ## Alternatives considered
