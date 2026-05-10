@@ -50,7 +50,6 @@ The infrastructure is organized as small, per-concern Terraform modules wired to
 | `storage` | [infra/modules/storage/](infra/modules/storage/) | Implemented |
 | `queue` | [infra/modules/queue/](infra/modules/queue/) | Implemented |
 | `table` | [infra/modules/table/](infra/modules/table/) | Implemented |
-| `registry` | [infra/modules/registry/](infra/modules/registry/) | Planned |
 | `extractor` | [infra/modules/extractor/](infra/modules/extractor/) | Planned |
 | `uploader` | [infra/modules/uploader/](infra/modules/uploader/) | Planned |
 
@@ -114,4 +113,4 @@ Idempotency is split between this module and the (future) extractor: the schema'
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, project bootstrapping and IAM setup procedure, local AWS profile configuration, available `make` targets, and the full DevOps strategy.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the DevOps strategy (environment and branch models), first-time setup (state backend, IAM roles, ECR registry, GitHub and local AWS configuration), the day-to-day workflow (PRs, prod promotion), and reference material (`make` targets, design notes).
