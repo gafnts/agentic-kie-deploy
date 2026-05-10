@@ -3,10 +3,10 @@ name: Deploy · Prod
 on:
   push:
     branches: [main]
-    paths: ["infra/**", ".github/workflows/deploy-prod.yml"]
+    paths: ["infra/**", "src/extractor/**", ".github/workflows/deploy-prod.yml"]
   pull_request:
     branches: [main]
-    paths: ["infra/**", ".github/workflows/deploy-prod.yml"]
+    paths: ["infra/**", "src/extractor/**", ".github/workflows/deploy-prod.yml"]
 
 permissions:
   id-token: write
@@ -81,12 +81,66 @@ jobs:
       - if: steps.plan.outcome == 'failure'
         run: exit 1
 
+  # Post-merge image push: runs before plan so the digest is available to bake
+  # into the saved plan artifact. Uses the prod-plan role (which has targeted
+  # ECR push permission) so no environment approval gate is required here.
+  build-and-push:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    outputs:
+      image_digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Detect extractor changes
+        uses: dorny/paths-filter@v4
+        id: changes
+        with:
+          filters: |
+            extractor:
+              - 'src/extractor/**'
+
+      - name: Configure AWS credentials
+        if: steps.changes.outputs.extractor == 'true'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_PROD_PLAN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        if: steps.changes.outputs.extractor == 'true'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push
+        if: steps.changes.outputs.extractor == 'true'
+        id: push
+        env:
+          REPOSITORY: agentic-kie-deploy-${{ env.ENV }}-extractor
+        run: |
+          IMAGE_TAG=$(git rev-parse --short HEAD)
+          REPO_URL=$(aws ecr describe-repositories \
+            --repository-names "$REPOSITORY" \
+            --query 'repositories[0].repositoryUri' \
+            --output text)
+          docker build -t "$REPO_URL:$IMAGE_TAG" src/extractor/
+          docker push "$REPO_URL:$IMAGE_TAG"
+          DIGEST=$(aws ecr describe-images \
+            --repository-name "$REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
   # Post-merge plan: generates the saved plan that will be applied.
   # Uploaded as an artifact so the apply job consumes the same bytes.
+  # Once the extractor module exists, add -var=extractor_image_digest here
+  # using needs.build-and-push.outputs.image_digest.
   plan:
     name: Plan
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
+    needs: build-and-push
     steps:
       - uses: actions/checkout@v6
 
