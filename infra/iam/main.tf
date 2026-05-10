@@ -204,6 +204,30 @@ resource "aws_iam_role_policy" "iam_for_lambda" {
   policy = data.aws_iam_policy_document.iam_for_lambda.json
 }
 
+data "aws_iam_policy_document" "ecr_push_prod" {
+  statement {
+    sid       = "GetAuthorizationToken"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "PushExtractorImage"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:CompleteLayerUpload",
+      "ecr:DescribeImages",
+      "ecr:DescribeRepositories",
+      "ecr:InitiateLayerUpload",
+      "ecr:PutImage",
+      "ecr:UploadLayerPart",
+    ]
+    resources = ["arn:aws:ecr:*:${local.account_id}:repository/agentic-kie-deploy-prod-extractor"]
+  }
+}
+
 resource "aws_iam_role" "prod_plan" {
   name               = "agentic-kie-prod-plan"
   assume_role_policy = data.aws_iam_policy_document.trust_prod_plan.json
@@ -229,4 +253,10 @@ resource "aws_iam_role_policy" "prod_plan_deny_other_envs" {
   name   = "deny-other-envs"
   role   = aws_iam_role.prod_plan.id
   policy = data.aws_iam_policy_document.deny_other_envs["prod"].json
+}
+
+resource "aws_iam_role_policy" "prod_plan_ecr_push" {
+  name   = "ecr-push-extractor"
+  role   = aws_iam_role.prod_plan.id
+  policy = data.aws_iam_policy_document.ecr_push_prod.json
 }

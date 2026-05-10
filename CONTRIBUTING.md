@@ -21,6 +21,7 @@ This repo contains the Terraform infrastructure for the Agentic KIE project, dep
   - [Install development dependencies and hooks](#install-development-dependencies-and-hooks)
   - [Bootstrap the remote state backend](#bootstrap-the-remote-state-backend)
   - [Create the IAM roles](#create-the-iam-roles)
+  - [Create the ECR repository](#create-the-ecr-repository)
   - [Configure GitHub](#configure-github)
   - [Configure your local AWS profile](#configure-your-local-aws-profile)
 - [Day-to-day workflow](#day-to-day-workflow)
@@ -119,6 +120,24 @@ make iam-init && make iam-apply
 
 The output gives you three role ARNs. Keep them — you'll paste two into GitHub and one into your AWS config.
 
+### Create the ECR repository
+
+The extractor Lambda is a container image, so the ECR repository must exist before the service stack can be applied. The registry lives in its own Terraform root at [infra/registry/](infra/registry/), one state file per environment, applied once per env and rebuilt approximately never afterwards. See [ADR-0008](docs/adr/0008-ecr-registry-stack-and-digest-pinned-images.md) for the rationale.
+
+```bash
+make registry-init ENV=local && make registry-apply ENV=local
+make registry-init ENV=dev   && make registry-apply ENV=dev
+make registry-init ENV=prod  && make registry-apply ENV=prod
+```
+
+The repository is named `agentic-kie-deploy-<env>-extractor`, has tag immutability on, scan-on-push enabled, and a lifecycle policy that keeps the last ten tagged images and expires untagged images after a day. Each env writes to its own state file (`service/<env>/registry.tfstate`).
+
+> [!TIP]
+> For local-only setup, `make provision` chains `iam-init`/`iam-apply`, `registry-init`/`registry-apply`, and the service-stack `init` in one shot. The `dev` and `prod` registries still need their own `registry-init`/`registry-apply` runs, since `provision` only covers `ENV=local`.
+
+> [!NOTE]
+> The service stack consumes the repository via a `data "aws_ecr_repository"` lookup (in the future extractor module). If `make plan` later fails with `couldn't find resource`, the registry stack has not been applied for that env.
+
 ### Configure GitHub
 
 In the repo settings:
@@ -129,7 +148,7 @@ In the repo settings:
 
 **Settings → Secrets and variables → Actions → Variables (Repository tab)**
 - `AWS_ROLE_ARN_DEV` = `<dev_role_arn>` from the Terraform output
-- `AWS_ROLE_ARN_PROD_PLAN` = `<prod_plan_role_arn>` from the Terraform output (read-only; used by plan jobs on PRs and post-merge)
+- `AWS_ROLE_ARN_PROD_PLAN` = `<prod_plan_role_arn>` from the Terraform output (used by plan jobs on PRs and post-merge, plus the pre-apply build-and-push job; read-only except for scoped ECR push to the extractor repository)
 - `AWS_ROLE_ARN_PROD` = `<prod_role_arn>` from the Terraform output (write; used by the apply job only)
 
 Variables (not secrets) is correct since role ARNs aren't sensitive on their own.
@@ -173,6 +192,9 @@ make destroy   # Tear down all local resources
 > [!IMPORTANT]
 > `make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1` — only CI is allowed to set that.
 
+> [!NOTE]
+> `make destroy` only tears down the service stack. The ECR repository in `infra/registry/` has its own state and a longer lifecycle, so tearing it down is a deliberate, separate step: `make registry-destroy ENV=<env>`. It carries the same guards as `make destroy` (explicit `ENV` required, prod blocked unless `I_KNOW=1`, backend-mismatch check), so prefer it over invoking `terraform destroy` directly inside `infra/registry/`.
+
 ### Quality gates
 
 Hooks run automatically, but you can also invoke them on demand. Useful when you want fast feedback on a single tool, or to run the full suite before pushing.
@@ -204,7 +226,7 @@ git push -u origin feature/my-change
 
 CI runs the dev workflow. Within a minute the PR gets a sticky comment titled **"Terraform Plan · `dev`"** showing what would be applied. Review the plan as part of code review.
 
-Merge the PR. CI applies the changes to dev automatically.
+Merge the PR. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first — it builds the container image, pushes it to the dev ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Service-only changes (Terraform tweaks, IAM tightening) skip the Docker work and re-apply with the previously-deployed digest. Either way, CI applies the changes to dev automatically.
 
 ### Promoting to prod
 
@@ -212,13 +234,14 @@ Open a PR from `develop` to `main`. CI posts a sticky **"Terraform Plan · `prod
 
 After the merge:
 
-1. CI runs the `plan` job, generates a saved plan, uploads it as a workflow artifact.
-2. CI queues the `apply` job, which waits at the prod environment approval gate.
-3. You get notified.
+1. If anything under `src/extractor/**` changed, CI runs `build-and-push` (under the prod-plan role's scoped ECR push permission) to publish a new image and emit its digest. Service-only changes skip this step.
+2. CI runs the `plan` job, generates a saved plan, uploads it as a workflow artifact.
+3. CI queues the `apply` job, which waits at the prod environment approval gate.
+4. You get notified.
    - Open the workflow run.
    - Review the plan in the previous job's logs.
    - Click "Review deployments" → Approve.
-4. CI applies the saved plan. The exact same bytes that were generated in step 1.
+5. CI applies the saved plan. The exact same bytes that were generated in step 2.
 
 If the plan looks wrong at the approval gate, reject it. Nothing is applied.
 
@@ -257,9 +280,15 @@ You only need to touch `infra/iam/` when:
 | `make tf-format` | Format all Terraform files |
 | `make bootstrap` | Create state bucket and write backend files (one-time, run once) |
 | `make backend` | Regenerate backend files only, no AWS calls (used by CI and after fresh clone) |
+| `make provision` | One-shot local bootstrap: chains `iam-init`/`iam-apply`, `registry-init`/`registry-apply`, and `init` for `ENV=local` |
 | `make iam-init` | Initialize Terraform backend for the IAM bootstrap module |
 | `make iam-plan` | Preview changes to the IAM bootstrap module |
 | `make iam-apply` | Apply the IAM bootstrap module (creates deploy roles) |
+| `make iam-destroy` | Destroy the IAM bootstrap module (refuses prod unless `I_KNOW=1`) |
+| `make registry-init` | Initialize Terraform backend for the registry stack for `ENV` |
+| `make registry-plan` | Preview changes to the registry stack for `ENV` |
+| `make registry-apply` | Apply the registry stack for `ENV` (creates the extractor ECR repository) |
+| `make registry-destroy` | Destroy the registry stack for `ENV` (requires explicit `ENV`; refuses prod unless `I_KNOW=1`) |
 | `make init` | Initialize Terraform backend for `ENV` |
 | `make plan` | Preview infrastructure changes for `ENV` |
 | `make ci-plan` | Preview changes and save plan to `tfplan.<env>` (used by CI) |
