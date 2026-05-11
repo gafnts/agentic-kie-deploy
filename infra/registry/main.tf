@@ -37,11 +37,12 @@ resource "aws_ecr_lifecycle_policy" "extractor" {
       },
       {
         rulePriority = 2
-        description  = "Keep last 10 tagged images"
+        description  = "Keep last 10 sha-tagged images"
         selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = 10
+          tagStatus     = "tagged"
+          tagPrefixList = ["sha-"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 10
         }
         action = { type = "expire" }
       }
@@ -65,6 +66,11 @@ data "aws_iam_policy_document" "extractor" {
       test     = "ArnLike"
       variable = "aws:SourceArn"
       values   = [local.extractor_lambda_arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
     }
   }
 }
