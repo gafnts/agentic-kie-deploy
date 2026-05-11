@@ -3,10 +3,20 @@ name: Deploy · Dev
 on:
   push:
     branches: [develop]
-    paths: ["infra/**", "src/extractor/**", ".github/workflows/deploy-dev.yml"]
+    paths:
+      - "infra/**"
+      - "!infra/iam/**"
+      - "!infra/registry/**"
+      - "src/extractor/**"
+      - ".github/workflows/deploy-dev.yml"
   pull_request:
     branches: [develop]
-    paths: ["infra/**", "src/extractor/**", ".github/workflows/deploy-dev.yml"]
+    paths:
+      - "infra/**"
+      - "!infra/iam/**"
+      - "!infra/registry/**"
+      - "src/extractor/**"
+      - ".github/workflows/deploy-dev.yml"
 
 permissions:
   id-token: write
