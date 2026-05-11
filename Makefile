@@ -75,9 +75,9 @@ backend: ## Write backend files for all environments (used by CI; no AWS calls)
 provision: ## One-time: create IAM roles, ECR registry (ENV=local), and initialize Terraform
 	$(MAKE) iam-init
 	$(MAKE) iam-apply
-	$(MAKE) registry-init
-	$(MAKE) registry-apply
-	$(MAKE) init
+	$(MAKE) registry-init ENV=local
+	$(MAKE) registry-apply ENV=local
+	$(MAKE) init ENV=local
 
 
 # IAM BOOTSTRAP MODULE
