@@ -3,10 +3,20 @@ name: Deploy · Prod
 on:
   push:
     branches: [main]
-    paths: ["infra/**", "src/extractor/**", ".github/workflows/deploy-prod.yml"]
+    paths:
+      - "infra/**"
+      - "!infra/iam/**"
+      - "!infra/registry/**"
+      - "src/extractor/**"
+      - ".github/workflows/deploy-prod.yml"
   pull_request:
     branches: [main]
-    paths: ["infra/**", "src/extractor/**", ".github/workflows/deploy-prod.yml"]
+    paths:
+      - "infra/**"
+      - "!infra/iam/**"
+      - "!infra/registry/**"
+      - "src/extractor/**"
+      - ".github/workflows/deploy-prod.yml"
 
 permissions:
   id-token: write
@@ -118,7 +128,7 @@ jobs:
         env:
           REPOSITORY: agentic-kie-deploy-${{ env.ENV }}-extractor
         run: |
-          IMAGE_TAG=$(git rev-parse --short HEAD)
+          IMAGE_TAG=sha-$(git rev-parse --short HEAD)
           REPO_URL=$(aws ecr describe-repositories \
             --repository-names "$REPOSITORY" \
             --query 'repositories[0].repositoryUri' \
