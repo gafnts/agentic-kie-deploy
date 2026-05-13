@@ -165,10 +165,10 @@ Four environment variables wire the Lambda into both secrets and the LangSmith p
 | -------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------- |
 | `LLM_PROVIDER_SECRET_ARN`  | ARN of the LLM provider secret                                           | Terraform, from `var.llm_provider_secret_arn`                       |
 | `LANGSMITH_SECRET_ARN`     | ARN of the LangSmith secret                                              | Terraform, from `var.langsmith_secret_arn`                          |
-| `LANGSMITH_PROJECT`        | `${var.project_name}-${var.environment}` (e.g. `agentic-kie-deploy-dev`) | Terraform, derived inside the module                                |
+| `LANGSMITH_PROJECT`        | `${var.project_name}-${var.environment}` (e.g. `agentic-kie-deploy-dev`) | Terraform, composed at the root from `project_name` + `environment` |
 | `LANGSMITH_API_KEY`        | The fetched LangSmith API key value                                      | Lambda at cold start, after `secretsmanager:GetSecretValue`         |
 
-Only ARNs and the (env-derived) project name are passed to Lambda configuration; no secret material lands in CloudTrail or in `terraform.tfstate`. The LLM provider key is passed to the library's client as a constructor argument rather than via env var, so it is not visible in `printenv`-style debugging output. `LANGSMITH_PROJECT` is intentionally derived inside the module rather than exposed as a tfvar — the value is fully determined by the environment, and a misalignment between `var.environment` and the LangSmith project name is the kind of bug that produces "where did my traces go" mystery sessions.
+Only ARNs and the (env-derived) project name are passed to Lambda configuration; no secret material lands in CloudTrail or in `terraform.tfstate`. The LLM provider key is passed to the library's client as a constructor argument rather than via env var, so it is not visible in `printenv`-style debugging output. `LANGSMITH_PROJECT` is intentionally composed at the root from `var.project_name` and `var.environment` rather than exposed as a tfvar — the value is fully determined by the environment, and a misalignment between the env's resource names and the LangSmith project name is the kind of bug that produces "where did my traces go" mystery sessions.
 
 ### Networking
 
