@@ -214,11 +214,13 @@ The returned ARN should end in `assumed-role/agentic-kie-local-deploy/...`.
 
 ### Local iteration
 
-Always set `AWS_PROFILE=agentic-kie-local` (or export it once per shell session).
+The repo includes a `.envrc` that sets `AWS_PROFILE=agentic-kie-local` automatically via [direnv](https://direnv.net). Run `direnv allow` once after cloning and the profile is set whenever you enter the directory. Without direnv, export it manually:
 
 ```bash
 export AWS_PROFILE=agentic-kie-local
+```
 
+```bash
 make init                # Initialize the local backend (idempotent, safe to re-run)
 make plan                # Preview changes
 make apply               # Apply changes
@@ -226,28 +228,17 @@ make destroy ENV=local   # Tear down all local resources
 ```
 
 > [!NOTE]
-> The service stack requires `extractor_image_digest` (digest-pinned per ADR-0008/0009). For local applies, build and push an image to the local ECR repository first, then pass the resulting digest on the command line:
+> The service stack requires `extractor_image_digest` (digest-pinned per ADR-0008/0009). For local applies, use `make build-extractor` to build, push, and capture the digest in one step:
 >
 > ```bash
-> REPO_URL=$(aws ecr describe-repositories \
->   --repository-names agentic-kie-deploy-local-extractor \
->   --query 'repositories[0].repositoryUri' --output text)
-> aws ecr get-login-password | docker login --username AWS --password-stdin "$REPO_URL"
-> docker buildx build --platform=linux/arm64 --push \
->   -t "$REPO_URL:sha-$(git rev-parse --short HEAD)" src/extractor/
-> export TF_VAR_extractor_image_digest=$(aws ecr describe-images \
->   --repository-name agentic-kie-deploy-local-extractor \
->   --image-ids imageTag="sha-$(git rev-parse --short HEAD)" \
->   --query 'imageDetails[0].imageDigest' --output text)
-> make plan ENV=local
+> export TF_VAR_extractor_image_digest=$(make build-extractor ENV=local)
 > make apply ENV=local
 > ```
+>
+> `make build-extractor` accepts any `ENV`, but outside `local` that use case is owned by CI. Only reach for it manually for other environments when troubleshooting.
 
 > [!IMPORTANT]
-> `make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1` — only CI is allowed to set that.
-
-> [!NOTE]
-> `make destroy` only tears down the service stack. The ECR repository in `infra/registry/` has its own state and a longer lifecycle, so tearing it down is a deliberate, separate step: `make registry-destroy ENV=<env>`. It carries the same guards as `make destroy` (explicit `ENV` required, prod blocked unless `I_KNOW=1`, backend-mismatch check), so prefer it over invoking `terraform destroy` directly inside `infra/registry/`.
+> `make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1` — only CI is allowed to set that. `make destroy` only tears down the service stack; the ECR repository in `infra/registry/` has its own lifecycle and a separate `make registry-destroy ENV=<env>` command (same guards apply — prefer it over invoking `terraform destroy` directly inside `infra/registry/`).
 
 ### Quality gates
 
@@ -344,6 +335,7 @@ You only need to touch `infra/iam/` when:
 | `make registry-plan` | Preview changes to the registry stack for `ENV` |
 | `make registry-apply` | Apply the registry stack for `ENV` (creates the extractor ECR repository) |
 | `make registry-destroy` | Destroy the registry stack for `ENV` (requires explicit `ENV`; refuses prod unless `I_KNOW=1`) |
+| `make build-extractor` | Build and push the extractor image to ECR for `ENV`; prints the resulting digest (used to set `TF_VAR_extractor_image_digest`) |
 | `make init` | Initialize Terraform backend for `ENV` |
 | `make plan` | Preview infrastructure changes for `ENV` |
 | `make ci-plan` | Preview changes and save plan to `tfplan.<env>` (used by CI) |
