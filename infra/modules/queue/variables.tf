@@ -11,10 +11,6 @@ variable "source_bucket_name" {
 variable "lambda_timeout_seconds" {
   description = "Timeout of the consumer Lambda. The queue's visibility timeout is derived as 6x this value, per AWS guidance, so the two cannot drift."
   type        = number
-  # TODO: drop the default and make this required once the extractor module exists
-  # and can pass its own timeout through. The default only exists so the queue
-  # module is usable in isolation before the extractor is wired up.
-  default = 60
 }
 
 variable "max_receive_count" {
