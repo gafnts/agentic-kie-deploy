@@ -11,6 +11,14 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 
+data "aws_secretsmanager_secret" "llm_provider" {
+  name = "${var.project_name}/${var.environment}/llm-provider"
+}
+
+data "aws_secretsmanager_secret" "langsmith" {
+  name = "${var.project_name}/${var.environment}/langsmith"
+}
+
 data "aws_ecr_repository" "extractor" {
   name = "${var.project_name}-${var.environment}-extractor"
 }
@@ -54,8 +62,8 @@ module "extractor" {
   ingestion_bucket_arn    = module.storage.bucket_arn
   results_table_arn       = module.table.table_arn
   results_table_name      = module.table.table_name
-  llm_provider_secret_arn = var.llm_provider_secret_arn
-  langsmith_secret_arn    = var.langsmith_secret_arn
+  llm_provider_secret_arn = data.aws_secretsmanager_secret.llm_provider.arn
+  langsmith_secret_arn    = data.aws_secretsmanager_secret.langsmith.arn
   langsmith_project       = "${var.project_name}-${var.environment}"
   log_retention_days      = var.environment == "prod" ? 30 : 14
   environment             = var.environment

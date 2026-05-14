@@ -30,13 +30,3 @@ variable "extractor_image_digest" {
     error_message = "extractor_image_digest must be a sha256 digest, e.g. sha256:abc...123."
   }
 }
-
-variable "llm_provider_secret_arn" {
-  description = "ARN of the Secrets Manager secret holding the LLM provider API key. Created out-of-band per environment."
-  type        = string
-}
-
-variable "langsmith_secret_arn" {
-  description = "ARN of the Secrets Manager secret holding the LangSmith API key. Created out-of-band per environment."
-  type        = string
-}
