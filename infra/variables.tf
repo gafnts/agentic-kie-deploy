@@ -11,7 +11,7 @@ variable "project_name" {
 }
 
 variable "environment" {
-  description = "Deployment environment (e.g., dev, prod)"
+  description = "Deployment environment"
   type        = string
   default     = "dev"
 }
@@ -20,4 +20,23 @@ variable "allowed_upload_origins" {
   description = "Origins allowed to make cross-origin PUT requests to the ingestion bucket"
   type        = list(string)
   default     = ["https://gabriel.com.gt"]
+}
+
+variable "extractor_image_digest" {
+  description = "Immutable digest of the extractor container image to deploy. Injected by CI from the build-and-push job output."
+  type        = string
+  validation {
+    condition     = can(regex("^sha256:[a-f0-9]{64}$", var.extractor_image_digest))
+    error_message = "extractor_image_digest must be a sha256 digest, e.g. sha256:abc...123."
+  }
+}
+
+variable "llm_provider_secret_arn" {
+  description = "ARN of the Secrets Manager secret holding the LLM provider API key. Created out-of-band per environment."
+  type        = string
+}
+
+variable "langsmith_secret_arn" {
+  description = "ARN of the Secrets Manager secret holding the LangSmith API key. Created out-of-band per environment."
+  type        = string
 }

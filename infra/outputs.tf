@@ -25,3 +25,15 @@ output "results_table_name" {
 output "results_table_arn" {
   value = module.table.table_arn
 }
+
+output "extractor_function_name" {
+  value = module.extractor.function_name
+}
+
+output "extractor_function_arn" {
+  value = module.extractor.function_arn
+}
+
+output "extractor_log_group_name" {
+  value = module.extractor.log_group_name
+}
