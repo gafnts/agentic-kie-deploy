@@ -19,6 +19,7 @@
   - [Storage](#storage)
   - [Queue](#queue)
   - [Table](#table)
+  - [Extractor](#extractor)
 - [Contributing](#contributing)
 - [Architecture decisions](docs/adr/README.md)
 
@@ -50,7 +51,7 @@ The infrastructure is organized as small, per-concern Terraform modules wired to
 | `storage` | [infra/modules/storage/](infra/modules/storage/) | Implemented |
 | `queue` | [infra/modules/queue/](infra/modules/queue/) | Implemented |
 | `table` | [infra/modules/table/](infra/modules/table/) | Implemented |
-| `extractor` | [infra/modules/extractor/](infra/modules/extractor/) | Planned |
+| `extractor` | [infra/modules/extractor/](infra/modules/extractor/) | Implemented |
 | `uploader` | [infra/modules/uploader/](infra/modules/uploader/) | Planned |
 
 ### Storage
@@ -87,7 +88,7 @@ The extraction queue sits between the ingestion bucket and the extractor Lambda.
 The queue does not constrain consumer parallelism; bounding the number of concurrent LLM invocations is the extractor module's job (`maximum_concurrency` on the event source mapping).
 
 > [!NOTE]
-> The visibility timeout is derived from `lambda_timeout_seconds` inside the module so the two values cannot drift. Until the extractor module exists, the input has a placeholder default; the extractor module will pass its own timeout through and that default will be removed.
+> The visibility timeout is derived from `lambda_timeout_seconds` inside the module so the two values cannot drift. The extractor module passes its own timeout through at the root, keeping the queue's hide window in lockstep with the extractor's maximum runtime.
 
 ### Table
 
@@ -104,10 +105,31 @@ The results table is the system of record for extractions. The extractor writes 
 | Deletion protection | `prod` only | Prod is protected from accidental destroy; `dev` stays destroyable so `make destroy` works in the iteration loop |
 | Streams | Disabled | No change-driven consumer today; enabling later is non-breaking |
 
-Idempotency is split between this module and the (future) extractor: the schema's job is to make retries collide on the same partition key, and the extractor's job is to use conditional writes so a redelivered message cannot clobber a terminal row.
+Idempotency is split between this module and the extractor: the schema's job is to make retries collide on the same partition key, and the extractor's job is to use conditional writes so a redelivered message cannot clobber a terminal row.
 
 > [!NOTE]
 > The table uses the AWS-managed KMS key, not a customer-managed key. For workloads ingesting real PII (names, dates, jurisdictions in extracted fields), switch to a CMK before real data arrives. DynamoDB re-encrypts items in place when the key changes, so the migration is operational rather than a copy job; the IAM consequence (`kms:Decrypt` and `kms:GenerateDataKey` on every reader and writer) mirrors the bucket-side migration sketched in ADR-0004.
+
+### Extractor
+
+The extractor is a container-image Lambda that consumes the extraction queue, runs the [`agentic-kie`](https://github.com/gafnts/agentic-kie) library against each uploaded document, and writes the structured answer to the results table. It is built on a native arm64 runner, deployed digest-pinned (ADR-0008), and bounded explicitly on the consumer side so an ingestion burst cannot run away with parallel LLM cost. See [ADR-0009](docs/adr/0009-extractor-lambda.md) for the full reasoning.
+
+| Lever | Value | What it controls |
+|---|---|---|
+| Timeout | 120s | 12× the benchmarked single-pass latency (ADR-0001), bounds runaway-invocation cost without truncating provider tail latency |
+| Memory / `/tmp` | 2048 MB each | Holds the container image + transitive libraries; vCPU allocation scales with memory |
+| Architecture | `arm64` | ~20% cheaper per GB-second on Graviton; native build on `ubuntu-24.04-arm` so no QEMU emulation |
+| `batch_size` | 1 | Per-invocation cost is dominated by the LLM call, so batching does not amortize anything and one-message batches keep the failure model simple |
+| `maximum_concurrency` | 10 (dev/local), 25 (prod) | Caps parallel LLM fan-out under an ingestion burst, closing the deferral ADR-0005 made |
+| Idempotency | Conditional `PutItem` + status-guarded `UpdateItem` | At-least-once SQS delivery cannot clobber a terminal row; redelivered terminal messages are a no-op |
+| Cold-start | No provisioned concurrency | Async polling model hides the 3–10s container-image cold start from the user |
+| Networking | No VPC | Talks only to AWS APIs and external HTTPS endpoints; no NAT cost, no ENI cold-start penalty |
+| Logs | 14d (dev/local), 30d (prod) | Operational telemetry only — LLM telemetry goes to LangSmith |
+
+The Lambda holds no encryption story of its own: environment variables are encrypted with the AWS-managed Lambda key, parity with the rest of the data path. Secrets (LLM provider key, LangSmith key) live in Secrets Manager, one per environment, fetched once at cold start.
+
+> [!NOTE]
+> LLM telemetry ships to **LangSmith** (SaaS) at MVP — purpose-built UI, zero infrastructure cost at portfolio scale, OTel-GenAI-compatible migration path to a self-hosted Langfuse or Phoenix when real data lands. See ADR-0009's "Observability" section for the migration boundary.
 
 ---
 

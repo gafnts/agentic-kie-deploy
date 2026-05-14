@@ -22,6 +22,7 @@ This repo contains the Terraform infrastructure for the Agentic KIE project, dep
   - [Bootstrap the remote state backend](#bootstrap-the-remote-state-backend)
   - [Create the IAM roles](#create-the-iam-roles)
   - [Create the ECR repository](#create-the-ecr-repository)
+  - [Create the extractor secrets](#create-the-extractor-secrets)
   - [Configure GitHub](#configure-github)
   - [Configure your local AWS profile](#configure-your-local-aws-profile)
 - [Day-to-day workflow](#day-to-day-workflow)
@@ -86,7 +87,7 @@ Hooks fire automatically on every git operation:
 
 | Stage | What runs | When |
 |---|---|---|
-| `pre-commit` | `terraform fmt`, `tflint`, `gitleaks`, `actionlint`, `ruff`, `shellcheck` | On `git commit` |
+| `pre-commit` | hygiene checks (whitespace, YAML, merge conflicts, large files, private keys), `terraform fmt`, `tflint`, `gitleaks`, `actionlint`, `shellcheck`, `pyproject-fmt`, `ruff check`, `ruff format` | On `git commit` |
 | `pre-push` | `terraform validate`, `terraform trivy`, `mypy`, `pytest` | On `git push` |
 
 The split keeps commits fast (sub-second feedback for the common loop) and reserves the slower scanners and validators for push time, before changes are shared.
@@ -136,7 +137,42 @@ The repository is named `agentic-kie-deploy-<env>-extractor`, has tag immutabili
 > For local-only setup, `make provision` chains `iam-init`/`iam-apply`, `registry-init`/`registry-apply`, and the service-stack `init` in one shot. The `dev` and `prod` registries still need their own `registry-init`/`registry-apply` runs, since `provision` only covers `ENV=local`.
 
 > [!NOTE]
-> The service stack consumes the repository via a `data "aws_ecr_repository"` lookup (in the future extractor module). If `make plan` later fails with `couldn't find resource`, the registry stack has not been applied for that env.
+> The service stack consumes the repository via a `data "aws_ecr_repository"` lookup in the extractor module. If `make plan` later fails with `couldn't find resource`, the registry stack has not been applied for that env.
+
+### Create the extractor secrets
+
+The extractor Lambda depends on two long-lived API keys: the LLM provider key (used on the hot path) and the LangSmith key (used to ship traces). They are stored in AWS Secrets Manager, one secret per environment, created out-of-band so their lifecycle stays independent of `terraform apply` / `terraform destroy`. See [ADR-0009](docs/adr/0009-extractor-lambda.md) for the rationale.
+
+Create the four secrets (two per env, three envs):
+
+```bash
+# LLM provider keys
+aws secretsmanager create-secret \
+  --name agentic-kie-deploy/local/llm-provider \
+  --secret-string '<your-llm-provider-key>'
+aws secretsmanager create-secret \
+  --name agentic-kie-deploy/dev/llm-provider \
+  --secret-string '<your-llm-provider-key>'
+aws secretsmanager create-secret \
+  --name agentic-kie-deploy/prod/llm-provider \
+  --secret-string '<your-llm-provider-key>'
+
+# LangSmith keys
+aws secretsmanager create-secret \
+  --name agentic-kie-deploy/local/langsmith \
+  --secret-string '<your-langsmith-key>'
+aws secretsmanager create-secret \
+  --name agentic-kie-deploy/dev/langsmith \
+  --secret-string '<your-langsmith-key>'
+aws secretsmanager create-secret \
+  --name agentic-kie-deploy/prod/langsmith \
+  --secret-string '<your-langsmith-key>'
+```
+
+Terraform discovers the secrets by name at plan time — no ARNs to copy or paste.
+
+> [!IMPORTANT]
+> Terraform manages the IAM grants on these secrets but **not** their values. Rotating a key is `aws secretsmanager update-secret` against the existing secret; the Lambda picks the new value up on the next cold start (warm invocations within a ~15-minute execution-environment lifetime continue to see the old value, by design).
 
 ### Configure GitHub
 
@@ -183,11 +219,29 @@ Always set `AWS_PROFILE=agentic-kie-local` (or export it once per shell session)
 ```bash
 export AWS_PROFILE=agentic-kie-local
 
-make init      # Initialize the local backend (idempotent, safe to re-run)
-make plan      # Preview changes
-make apply     # Apply changes
-make destroy   # Tear down all local resources
+make init                # Initialize the local backend (idempotent, safe to re-run)
+make plan                # Preview changes
+make apply               # Apply changes
+make destroy ENV=local   # Tear down all local resources
 ```
+
+> [!NOTE]
+> The service stack requires `extractor_image_digest` (digest-pinned per ADR-0008/0009). For local applies, build and push an image to the local ECR repository first, then pass the resulting digest on the command line:
+>
+> ```bash
+> REPO_URL=$(aws ecr describe-repositories \
+>   --repository-names agentic-kie-deploy-local-extractor \
+>   --query 'repositories[0].repositoryUri' --output text)
+> aws ecr get-login-password | docker login --username AWS --password-stdin "$REPO_URL"
+> docker buildx build --platform=linux/arm64 --push \
+>   -t "$REPO_URL:sha-$(git rev-parse --short HEAD)" src/extractor/
+> export TF_VAR_extractor_image_digest=$(aws ecr describe-images \
+>   --repository-name agentic-kie-deploy-local-extractor \
+>   --image-ids imageTag="sha-$(git rev-parse --short HEAD)" \
+>   --query 'imageDetails[0].imageDigest' --output text)
+> make plan ENV=local
+> make apply ENV=local
+> ```
 
 > [!IMPORTANT]
 > `make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1` — only CI is allowed to set that.
@@ -226,7 +280,7 @@ git push -u origin feature/my-change
 
 CI runs the dev workflow. Within a minute the PR gets a sticky comment titled **"Terraform Plan · `dev`"** showing what would be applied. Review the plan as part of code review.
 
-Merge the PR. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first — it builds the container image, pushes it to the dev ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Service-only changes (Terraform tweaks, IAM tightening) skip the Docker work and re-apply with the previously-deployed digest. Either way, CI applies the changes to dev automatically.
+Merge the PR. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first — it builds the container image, pushes it to the dev ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Service-only changes (Terraform tweaks, IAM tightening) skip the Docker work and re-apply with the previously-deployed digest. Either way, CI applies the changes to dev automatically, then runs `make smoke` as a post-apply ingress check (S3 → EventBridge → SQS); a smoke failure fails the workflow.
 
 ### Promoting to prod
 
@@ -277,6 +331,7 @@ You only need to touch `infra/iam/` when:
 | `make format` | Apply ruff lint fixes and formatting to `src` |
 | `make type` | Run mypy on `src` |
 | `make test` | Run pytest with coverage |
+| `make smoke` | End-to-end check against the deployed `ENV`: upload a sentinel object, assert it lands in the extraction queue (requires `terraform output` to resolve, i.e. backend already initialized for that env) |
 | `make tf-format` | Format all Terraform files |
 | `make bootstrap` | Create state bucket and write backend files (one-time, run once) |
 | `make backend` | Regenerate backend files only, no AWS calls (used by CI and after fresh clone) |
@@ -294,7 +349,7 @@ You only need to touch `infra/iam/` when:
 | `make ci-plan` | Preview changes and save plan to `tfplan.<env>` (used by CI) |
 | `make apply` | Apply infrastructure changes for `ENV` (refuses prod unless `I_KNOW=1`) |
 | `make ci-apply` | Apply saved plan `tfplan.<env>` (used by CI for prod) |
-| `make destroy` | Destroy all infrastructure for `ENV` (refuses prod unless `I_KNOW=1`) |
+| `make destroy` | Destroy all infrastructure for `ENV` (requires explicit `ENV`; refuses prod unless `I_KNOW=1`) |
 
 `ENV` defaults to `local`. Override with `make plan ENV=dev`, etc.
 
