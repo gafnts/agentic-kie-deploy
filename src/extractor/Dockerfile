@@ -8,6 +8,6 @@ ENV UV_PROJECT_ENVIRONMENT=/var/lang
 COPY pyproject.toml uv.lock ${LAMBDA_TASK_ROOT}/
 RUN uv sync --locked --no-dev --no-install-project
 
-COPY handler.py ${LAMBDA_TASK_ROOT}/
+COPY handler.py schema.py ${LAMBDA_TASK_ROOT}/
 
 CMD ["handler.handler"]
