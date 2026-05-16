@@ -43,6 +43,7 @@ table = dynamodb.Table(RESULTS_TABLE_NAME)
 
 
 def fetch_secret(arn: str) -> Any:
+    """Retrieve a secret string from AWS Secrets Manager by ARN."""
     return secrets_client.get_secret_value(SecretId=arn)["SecretString"]
 
 
@@ -67,23 +68,25 @@ DOC_ID_RE = re.compile(
 
 
 def parse_document_id(key: str) -> str | None:
+    """Extract the document UUID from an S3 object key, or None if the key doesn't match."""
     match = DOC_ID_RE.match(key)
     return match.group(1) if match else None
 
 
 def iso_now() -> str:
+    """Return the current UTC time as an ISO 8601 string."""
     return datetime.datetime.now(datetime.UTC).isoformat()
 
 
 def log(outcome: str, **fields: Any) -> None:
+    """Emit a structured log entry with the given outcome and extra fields."""
     logger.info({"handler_outcome": outcome, **fields})
 
 
 @traceable(name="extract_document", project_name=LANGSMITH_PROJECT)
 def extract(bucket: str, key: str, document_id: str) -> dict[str, Any]:
     """
-    Download ``s3://bucket/key``, run single-pass NDA extraction, and return
-    structured results.
+    Download ``s3://bucket/key``, run single-pass NDA extraction, and return structured results.
 
     Return shape matches the optional attributes in the table schema (ADR-0007)
     so the conditional UPDATE in :func:`complete` works as-is.
@@ -109,6 +112,7 @@ def extract(bucket: str, key: str, document_id: str) -> dict[str, Any]:
 
 
 def claim(document_id: str) -> None:
+    """Conditionally insert a pending record for document_id; raises if it already exists."""
     table.put_item(
         Item={
             "document_id": document_id,
@@ -120,12 +124,14 @@ def claim(document_id: str) -> None:
 
 
 def read_status(document_id: str) -> str | None:
+    """Return the current DynamoDB status for document_id, or None if not found."""
     resp = table.get_item(Key={"document_id": document_id}, ConsistentRead=True)
     item = resp.get("Item")
     return item.get("status") if item else None
 
 
 def complete(document_id: str, result: dict[str, Any]) -> None:
+    """Conditionally transition document_id from pending to succeeded and write extraction results."""
     table.update_item(
         Key={"document_id": document_id},
         UpdateExpression=(
@@ -148,6 +154,7 @@ def complete(document_id: str, result: dict[str, Any]) -> None:
 
 
 def fail(document_id: str, error_code: str, error_message: str) -> None:
+    """Conditionally transition document_id from pending to failed and record the error."""
     table.update_item(
         Key={"document_id": document_id},
         UpdateExpression="SET #s = :new, completed_at = :now, #e = :err",
@@ -257,6 +264,7 @@ def process_record(record: dict[str, Any]) -> str | None:
 
 @logger.inject_lambda_context
 def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
+    """Lambda entry point: process each SQS record and return batch item failures."""
     failures: list[dict[str, str]] = []
     try:
         for record in event.get("Records", []):

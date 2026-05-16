@@ -14,6 +14,7 @@ class Party(BaseModel):
     @field_validator("name", mode="before")
     @classmethod
     def normalize_name(cls, v: str) -> str:
+        """Normalize unicode quotes, strip commas, and replace spaces/colons with underscores."""
         # Normalize unicode curly quotes to ASCII apostrophes/quotes
         v = v.replace("\u2018", "'").replace("\u2019", "'")
         v = v.replace("\u201c", '"').replace("\u201d", '"')
@@ -80,6 +81,7 @@ class NDA(BaseModel):
     @field_validator("effective_date", mode="before")
     @classmethod
     def validate_effective_date(cls, v: str | None) -> str | None:
+        """Reject effective_date values that are not in YYYY-MM-DD format."""
         if v is None:
             return v
         try:
@@ -93,6 +95,7 @@ class NDA(BaseModel):
     @field_validator("jurisdiction", "term", mode="before")
     @classmethod
     def normalize_underscores(cls, v: str | None) -> str | None:
+        """Replace spaces and colons with underscores in string fields."""
         if v is None:
             return v
         return v.replace(" ", "_").replace(":", "_")
@@ -100,10 +103,7 @@ class NDA(BaseModel):
     @field_validator("jurisdiction", mode="after")
     @classmethod
     def strip_jurisdiction_prefix(cls, v: str | None) -> str | None:
-        """
-        Deterministically strip "State_of_" / "Commonwealth_of_" prefixes
-        that models sometimes prepend despite prompt instructions.
-        """
+        """Strip "State_of_" and "Commonwealth_of_" prefixes that models sometimes prepend despite prompt instructions."""
         if v is None:
             return v
         for prefix in ("State_of_", "Commonwealth_of_"):
@@ -114,6 +114,7 @@ class NDA(BaseModel):
     @field_validator("term", mode="after")
     @classmethod
     def validate_term_format(cls, v: str | None) -> str | None:
+        """Reject term values that don't match the '{number}_{units}' format."""
         if v is None:
             return v
         if not re.fullmatch(r"\d+(?:\.\d+)?_\w+", v):
