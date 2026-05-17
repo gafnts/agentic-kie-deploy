@@ -24,7 +24,7 @@ data "aws_ecr_repository" "extractor" {
 }
 
 locals {
-  bucket_suffix             = substr(sha256("${var.project_name}-${var.environment}-${data.aws_caller_identity.current.account_id}"), 0, 8)
+  bucket_suffix             = substr(sha256("${var.project_name}-${var.environment}-${data.aws_caller_identity.current.account_id}"), 0, 16)
   bucket_name               = "${var.project_name}-${var.environment}-ingestion-${local.bucket_suffix}"
   extractor_timeout_seconds = 120
 }
