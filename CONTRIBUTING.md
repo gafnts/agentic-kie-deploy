@@ -1,6 +1,6 @@
 # Contributing
 
-This repo contains the Terraform infrastructure for the Agentic KIE project, deployed to AWS across three environments (`local`, `dev`, `prod`). Contributing means authoring Terraform. Infrastructure changes trigger a CI-generated plan on every PR so reviewers can see exactly what would land; production additionally gates the apply on a manual approval against a saved plan generated post-merge.
+This repo contains the Terraform infrastructure for the Agentic KIE project, deployed to AWS across three environments (`local`, `staging`, `prod`). Contributing means authoring Terraform. Infrastructure changes trigger a CI-generated plan on every PR so reviewers can see exactly what would land; production additionally gates the apply on a manual approval against a saved plan generated post-merge.
 
 > [!IMPORTANT]
 > This project requires:
@@ -22,10 +22,12 @@ This repo contains the Terraform infrastructure for the Agentic KIE project, dep
   - [Bootstrap the remote state backend](#bootstrap-the-remote-state-backend)
   - [Create the IAM roles](#create-the-iam-roles)
   - [Create the ECR repository](#create-the-ecr-repository)
+  - [Create the extractor secrets](#create-the-extractor-secrets)
   - [Configure GitHub](#configure-github)
   - [Configure your local AWS profile](#configure-your-local-aws-profile)
 - [Day-to-day workflow](#day-to-day-workflow)
   - [Local iteration](#local-iteration)
+  - [Manual smoke test](#manual-smoke-test)
   - [Quality gates](#quality-gates)
   - [Opening a PR](#opening-a-pr)
   - [Promoting to prod](#promoting-to-prod)
@@ -44,7 +46,7 @@ The project has three deployment environments, all in the same AWS account:
 | Environment | Who deploys | When |
 |---|---|---|
 | `local` | You, from your laptop | Iterating on infrastructure changes |
-| `dev` | GitHub Actions | On merge to `develop` |
+| `staging` | GitHub Actions | On merge to `develop` |
 | `prod` | GitHub Actions | On merge to `main`, gated by manual approval |
 
 > [!NOTE]
@@ -52,13 +54,13 @@ The project has three deployment environments, all in the same AWS account:
 
 ### Branch model
 
-Two long-lived branches map to the two CI-managed environments: `develop` drives `dev`, `main` drives `prod`. Every change flows through a PR with a plan attached, and prod additionally waits on a manual approval before the saved plan is applied.
+Two long-lived branches map to the two CI-managed environments: `develop` drives `staging`, `main` drives `prod`. Every change flows through a PR with a plan attached, and prod additionally waits on a manual approval before the saved plan is applied.
 
 ```mermaid
 flowchart LR
     feature[Feature branch] -->|PR| develop[develop]
-    develop -->|CI plans dev| planDev{{Plan dev}}
-    planDev -->|merge| applyDev[CI applies dev]
+    develop -->|CI plans staging| planStaging{{Plan staging}}
+    planStaging -->|merge| applyStaging[CI applies staging]
 
     develop -->|PR| main[main]
     main -->|CI plans prod| planProd{{Plan prod}}
@@ -68,7 +70,7 @@ flowchart LR
 ```
 
 > [!NOTE]
-> The dev and prod apply jobs are not symmetric. Dev runs `terraform apply` directly against current state at merge time — the PR plan is informational, not the artifact applied. This is intentional: dev is the iteration environment, and the simplification is a reasonable trade-off. Prod is plan-bound: a new plan is generated post-merge, saved as an artifact, and that exact artifact is what gets applied after approval.
+> The staging and prod apply jobs are not symmetric. Staging runs `terraform apply` directly against current state at merge time — the PR plan is informational, not the artifact applied. This is intentional: staging is the iteration environment, and the simplification is a reasonable trade-off. Prod is plan-bound: a new plan is generated post-merge, saved as an artifact, and that exact artifact is what gets applied after approval.
 
 ## First-time setup
 
@@ -86,7 +88,7 @@ Hooks fire automatically on every git operation:
 
 | Stage | What runs | When |
 |---|---|---|
-| `pre-commit` | `terraform fmt`, `tflint`, `gitleaks`, `actionlint`, `ruff`, `shellcheck` | On `git commit` |
+| `pre-commit` | hygiene checks (whitespace, YAML, merge conflicts, large files, private keys), `terraform fmt`, `tflint`, `gitleaks`, `actionlint`, `shellcheck`, `pyproject-fmt`, `ruff check`, `ruff format` | On `git commit` |
 | `pre-push` | `terraform validate`, `terraform trivy`, `mypy`, `pytest` | On `git push` |
 
 The split keeps commits fast (sub-second feedback for the common loop) and reserves the slower scanners and validators for push time, before changes are shared.
@@ -112,7 +114,7 @@ The bucket is private, versioned, encrypted, and uses S3 native locking (`use_lo
 
 ### Create the IAM roles
 
-The three deploy roles (`local`, `dev`, `prod`) live in a separate Terraform root at `infra/iam/`. They're applied once with admin credentials and rarely touched afterward.
+The three deploy roles (`local`, `staging`, `prod`) live in a separate Terraform root at `infra/iam/`. They're applied once with admin credentials and rarely touched afterward.
 
 ```bash
 make iam-init && make iam-apply
@@ -126,17 +128,52 @@ The extractor Lambda is a container image, so the ECR repository must exist befo
 
 ```bash
 make registry-init ENV=local && make registry-apply ENV=local
-make registry-init ENV=dev   && make registry-apply ENV=dev
+make registry-init ENV=staging && make registry-apply ENV=staging
 make registry-init ENV=prod  && make registry-apply ENV=prod
 ```
 
 The repository is named `agentic-kie-deploy-<env>-extractor`, has tag immutability on, scan-on-push enabled, and a lifecycle policy that keeps the last ten tagged images and expires untagged images after a day. Each env writes to its own state file (`service/<env>/registry.tfstate`).
 
 > [!TIP]
-> For local-only setup, `make provision` chains `iam-init`/`iam-apply`, `registry-init`/`registry-apply`, and the service-stack `init` in one shot. The `dev` and `prod` registries still need their own `registry-init`/`registry-apply` runs, since `provision` only covers `ENV=local`.
+> For local-only setup, `make provision` chains `iam-init`/`iam-apply`, `registry-init`/`registry-apply`, and the service-stack `init` in one shot. The `staging` and `prod` registries still need their own `registry-init`/`registry-apply` runs, since `provision` only covers `ENV=local`.
 
 > [!NOTE]
-> The service stack consumes the repository via a `data "aws_ecr_repository"` lookup (in the future extractor module). If `make plan` later fails with `couldn't find resource`, the registry stack has not been applied for that env.
+> The service stack consumes the repository via a `data "aws_ecr_repository"` lookup in the extractor module. If `make plan` later fails with `couldn't find resource`, the registry stack has not been applied for that env.
+
+### Create the extractor secrets
+
+The extractor Lambda depends on two long-lived API keys: the LLM provider key (used on the hot path) and the LangSmith key (used to ship traces). They are stored in AWS Secrets Manager, one secret per environment, created out-of-band so their lifecycle stays independent of `terraform apply` / `terraform destroy`. See [ADR-0009](docs/adr/0009-extractor-lambda.md) for the rationale.
+
+Create the four secrets (two per env, three envs):
+
+```bash
+# LLM provider keys
+aws secretsmanager create-secret \
+  --name agentic-kie-deploy/local/llm-provider \
+  --secret-string '<your-llm-provider-key>'
+aws secretsmanager create-secret \
+  --name agentic-kie-deploy/staging/llm-provider \
+  --secret-string '<your-llm-provider-key>'
+aws secretsmanager create-secret \
+  --name agentic-kie-deploy/prod/llm-provider \
+  --secret-string '<your-llm-provider-key>'
+
+# LangSmith keys
+aws secretsmanager create-secret \
+  --name agentic-kie-deploy/local/langsmith \
+  --secret-string '<your-langsmith-key>'
+aws secretsmanager create-secret \
+  --name agentic-kie-deploy/staging/langsmith \
+  --secret-string '<your-langsmith-key>'
+aws secretsmanager create-secret \
+  --name agentic-kie-deploy/prod/langsmith \
+  --secret-string '<your-langsmith-key>'
+```
+
+Terraform discovers the secrets by name at plan time — no ARNs to copy or paste.
+
+> [!IMPORTANT]
+> Terraform manages the IAM grants on these secrets but **not** their values. Rotating a key is `aws secretsmanager update-secret` against the existing secret; the Lambda picks the new value up on the next cold start (warm invocations within a ~15-minute execution-environment lifetime continue to see the old value, by design).
 
 ### Configure GitHub
 
@@ -147,7 +184,7 @@ In the repo settings:
 - This is what gates the prod apply step.
 
 **Settings → Secrets and variables → Actions → Variables (Repository tab)**
-- `AWS_ROLE_ARN_DEV` = `<dev_role_arn>` from the Terraform output
+- `AWS_ROLE_ARN_STAGING` = `<staging_role_arn>` from the Terraform output
 - `AWS_ROLE_ARN_PROD_PLAN` = `<prod_plan_role_arn>` from the Terraform output (used by plan jobs on PRs and post-merge, plus the pre-apply build-and-push job; read-only except for scoped ECR push to the extractor repository)
 - `AWS_ROLE_ARN_PROD` = `<prod_role_arn>` from the Terraform output (write; used by the apply job only)
 
@@ -178,22 +215,59 @@ The returned ARN should end in `assumed-role/agentic-kie-local-deploy/...`.
 
 ### Local iteration
 
-Always set `AWS_PROFILE=agentic-kie-local` (or export it once per shell session).
+The repo includes a `.envrc` that sets `AWS_PROFILE=agentic-kie-local` automatically via [direnv](https://direnv.net). Run `direnv allow` once after cloning and the profile is set whenever you enter the directory. Without direnv, export it manually:
 
 ```bash
 export AWS_PROFILE=agentic-kie-local
-
-make init      # Initialize the local backend (idempotent, safe to re-run)
-make plan      # Preview changes
-make apply     # Apply changes
-make destroy   # Tear down all local resources
 ```
 
-> [!IMPORTANT]
-> `make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1` — only CI is allowed to set that.
+```bash
+make init                # Initialize the local backend (idempotent, safe to re-run)
+make plan                # Preview changes
+make apply               # Apply changes
+make destroy ENV=local   # Tear down all local resources
+```
 
 > [!NOTE]
-> `make destroy` only tears down the service stack. The ECR repository in `infra/registry/` has its own state and a longer lifecycle, so tearing it down is a deliberate, separate step: `make registry-destroy ENV=<env>`. It carries the same guards as `make destroy` (explicit `ENV` required, prod blocked unless `I_KNOW=1`, backend-mismatch check), so prefer it over invoking `terraform destroy` directly inside `infra/registry/`.
+> The service stack requires `extractor_image_digest` (digest-pinned per ADR-0008/0009). For local applies, use `make build-extractor` to build, push, and capture the digest in one step:
+>
+> ```bash
+> export TF_VAR_extractor_image_digest=$(make build-extractor ENV=local)
+> make apply ENV=local
+> ```
+>
+> `make build-extractor` accepts any `ENV`, but outside `local` that use case is owned by CI. Only reach for it manually for other environments when troubleshooting.
+
+> [!IMPORTANT]
+> `make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1` — only CI is allowed to set that. `make destroy` only tears down the service stack; the ECR repository in `infra/registry/` has its own lifecycle and a separate `make registry-destroy ENV=<env>` command (same guards apply — prefer it over invoking `terraform destroy` directly inside `infra/registry/`).
+
+### Manual smoke test
+
+After applying infrastructure, you can verify the full extraction pipeline end-to-end using only the AWS CLI.
+
+```bash
+# 1. Capture terraform outputs
+BUCKET=$(terraform -chdir=infra output -raw ingestion_bucket_name)
+TABLE=$(terraform -chdir=infra output -raw results_table_name)
+FUNCTION=$(terraform -chdir=infra output -raw extractor_function_name)
+
+# 2. Upload a PDF
+DOC_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+aws s3 cp tests/static/smoke_document.pdf \
+  "s3://$BUCKET/uploads/$(date +%Y/%m/%d)/$DOC_ID"
+
+# 3. Watch Lambda logs in real time
+aws logs tail "/aws/lambda/$FUNCTION" --follow
+
+# 4. Check DynamoDB for the result
+aws dynamodb get-item \
+  --table-name "$TABLE" \
+  --key "{\"document_id\":{\"S\":\"$DOC_ID\"}}" \
+  --consistent-read
+```
+
+> [!NOTE]
+> `make smoke` runs the same pipeline automatically via pytest (with a progress bar and a 180-second timeout). Use the manual steps above when you want to observe log output in real time or inspect the raw DynamoDB item.
 
 ### Quality gates
 
@@ -224,9 +298,9 @@ git switch -c feature/my-change
 git push -u origin feature/my-change
 ```
 
-CI runs the dev workflow. Within a minute the PR gets a sticky comment titled **"Terraform Plan · `dev`"** showing what would be applied. Review the plan as part of code review.
+CI runs the staging workflow. Within a minute the PR gets a sticky comment titled **"Terraform Plan · `staging`"** showing what would be applied. Review the plan as part of code review.
 
-Merge the PR. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first — it builds the container image, pushes it to the dev ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Service-only changes (Terraform tweaks, IAM tightening) skip the Docker work and re-apply with the previously-deployed digest. Either way, CI applies the changes to dev automatically.
+Merge the PR. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first — it builds the container image, pushes it to the staging ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Service-only changes (Terraform tweaks, IAM tightening) skip the Docker work and re-apply with the previously-deployed digest. Either way, CI applies the changes to staging automatically, then runs `make smoke` as a post-apply check; a smoke failure fails the workflow. Smoke covers two paths: the queue path (S3 → EventBridge → SQS) and the full extraction path (S3 → Lambda → DynamoDB), verifying that an uploaded PDF reaches a `succeeded` status in the results table.
 
 ### Promoting to prod
 
@@ -277,6 +351,7 @@ You only need to touch `infra/iam/` when:
 | `make format` | Apply ruff lint fixes and formatting to `src` |
 | `make type` | Run mypy on `src` |
 | `make test` | Run pytest with coverage |
+| `make smoke` | Run integration smoke tests against the deployed `ENV`: verifies the queue path (S3 → EventBridge → SQS) and the full extraction path (S3 → Lambda → DynamoDB). Requires Terraform outputs to be available (backend initialized for that env). |
 | `make tf-format` | Format all Terraform files |
 | `make bootstrap` | Create state bucket and write backend files (one-time, run once) |
 | `make backend` | Regenerate backend files only, no AWS calls (used by CI and after fresh clone) |
@@ -289,14 +364,15 @@ You only need to touch `infra/iam/` when:
 | `make registry-plan` | Preview changes to the registry stack for `ENV` |
 | `make registry-apply` | Apply the registry stack for `ENV` (creates the extractor ECR repository) |
 | `make registry-destroy` | Destroy the registry stack for `ENV` (requires explicit `ENV`; refuses prod unless `I_KNOW=1`) |
+| `make build-extractor` | Build and push the extractor image to ECR for `ENV`; prints the resulting digest (used to set `TF_VAR_extractor_image_digest`) |
 | `make init` | Initialize Terraform backend for `ENV` |
 | `make plan` | Preview infrastructure changes for `ENV` |
 | `make ci-plan` | Preview changes and save plan to `tfplan.<env>` (used by CI) |
 | `make apply` | Apply infrastructure changes for `ENV` (refuses prod unless `I_KNOW=1`) |
 | `make ci-apply` | Apply saved plan `tfplan.<env>` (used by CI for prod) |
-| `make destroy` | Destroy all infrastructure for `ENV` (refuses prod unless `I_KNOW=1`) |
+| `make destroy` | Destroy all infrastructure for `ENV` (requires explicit `ENV`; refuses prod unless `I_KNOW=1`) |
 
-`ENV` defaults to `local`. Override with `make plan ENV=dev`, etc.
+`ENV` defaults to `local`. Override with `make plan ENV=staging`, etc.
 
 ### Files that are gitignored
 

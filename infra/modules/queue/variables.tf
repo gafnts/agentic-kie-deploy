@@ -11,14 +11,20 @@ variable "source_bucket_name" {
 variable "lambda_timeout_seconds" {
   description = "Timeout of the consumer Lambda. The queue's visibility timeout is derived as 6x this value, per AWS guidance, so the two cannot drift."
   type        = number
-  # TODO: drop the default and make this required once the extractor module exists
-  # and can pass its own timeout through. The default only exists so the queue
-  # module is usable in isolation before the extractor is wired up.
-  default = 60
 }
 
 variable "max_receive_count" {
   description = "Number of receives before a message is moved to the DLQ"
   type        = number
   default     = 3
+}
+
+variable "alarm_topic_arn" {
+  description = "ARN of the SNS topic that the DLQ depth alarm publishes to. The topic lives in the alarms module so the alerting plane is one resource per env."
+  type        = string
+}
+
+variable "environment" {
+  description = "Deployment environment. Surfaces on the alarm tag the iam/ stack's DenyTouchingOtherEnvs guard reads."
+  type        = string
 }

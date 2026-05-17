@@ -21,3 +21,7 @@ output "dlq_url" {
 output "dlq_name" {
   value = aws_sqs_queue.extraction_dlq.name
 }
+
+output "dlq_alarm_arn" {
+  value = aws_cloudwatch_metric_alarm.dlq_messages_visible.arn
+}

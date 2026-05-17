@@ -1,9 +1,9 @@
 output "ingestion_bucket_name" {
-  value = module.storage.bucket_name
+  value = module.bucket.bucket_name
 }
 
 output "ingestion_bucket_arn" {
-  value = module.storage.bucket_arn
+  value = module.bucket.bucket_arn
 }
 
 output "extraction_queue_url" {
@@ -24,4 +24,20 @@ output "results_table_name" {
 
 output "results_table_arn" {
   value = module.table.table_arn
+}
+
+output "extractor_function_name" {
+  value = module.extractor.function_name
+}
+
+output "extractor_function_arn" {
+  value = module.extractor.function_arn
+}
+
+output "extractor_log_group_name" {
+  value = module.extractor.log_group_name
+}
+
+output "alarm_topic_arn" {
+  value = module.alarms.topic_arn
 }

@@ -3,7 +3,7 @@ set -euo pipefail
 
 AWS_REGION="${AWS_REGION:-us-east-1}"
 PROJECT="agentic-kie"
-ENVS=("local" "dev" "prod")
+ENVS=("local" "staging" "prod")
 
 SUFFIX=$(echo -n "${PROJECT}" | openssl dgst -sha256 | awk '{print $2}' | cut -c1-8)
 BUCKET="${PROJECT}-tfstate-${SUFFIX}"

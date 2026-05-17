@@ -26,3 +26,4 @@ This directory records the significant architectural decisions made in this proj
 | [0006](0006-document-id-lifecycle.md) | Server-generated document ID, carried by the S3 object key | Accepted |
 | [0007](0007-table-schema-and-encryption.md) | Table schema, bounded item size, and encryption posture | Accepted |
 | [0008](0008-ecr-registry-stack-and-digest-pinned-images.md) | ECR registry as a separate stack, digest-pinned extractor images | Accepted |
+| [0009](0009-extractor-lambda.md) | Extractor Lambda sizing, concurrency, idempotency, observability and IAM posture | Accepted |

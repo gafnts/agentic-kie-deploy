@@ -18,6 +18,7 @@ REG_BACKEND := -backend-config=envs/$(ENV).backend.tfbackend
         bootstrap backend provision \
         iam-init iam-plan iam-apply iam-destroy \
         registry-init registry-plan registry-apply registry-destroy \
+        build-extractor \
         init plan ci-plan apply ci-apply destroy lock \
         _check-backend _check-registry-backend
 
@@ -61,7 +62,7 @@ test: ## Run pytest with coverage
 	uv run pytest --cov --cov-report=term-missing
 
 smoke: ## Run end-to-end smoke tests against the deployed ENV (requires terraform outputs)
-	@bash tests/queue.sh
+	uv run pytest -m integration -s
 
 
 # BOOTSTRAP & PROVISIONING
@@ -114,6 +115,26 @@ registry-destroy: _check-registry-backend ## Destroy the registry stack for ENV 
 	@if [ "$(ENV)" = "prod" ] && [ "$(I_KNOW)" != "1" ]; then \
 		echo "Refusing to destroy prod registry. Re-run with I_KNOW=1."; exit 1; fi
 	$(REG_TF) destroy $(REG_VARS)
+
+
+# EXTRACTOR IMAGE
+
+# Local equivalent of the build-and-push job in .github/workflows/deploy-staging.yml.
+# Build output goes to stderr so the digest can be captured via `$(make ...)`.
+build-extractor: ## Build & push the extractor image to ECR for ENV; prints the resulting digest
+	@REPO_URL=$$(aws ecr describe-repositories --region us-east-1 \
+		--repository-names agentic-kie-deploy-$(ENV)-extractor \
+		--query 'repositories[0].repositoryUri' --output text) && \
+	aws ecr get-login-password --region us-east-1 \
+		| docker login --username AWS --password-stdin "$${REPO_URL%/*}" >&2 && \
+	IMAGE_TAG=sha-$$(git rev-parse --short HEAD) && \
+	docker buildx build --platform=linux/arm64 --push \
+		-t "$$REPO_URL:$$IMAGE_TAG" src/extractor/ >&2 && \
+	DIGEST=$$(aws ecr describe-images --region us-east-1 \
+		--repository-name agentic-kie-deploy-$(ENV)-extractor \
+		--image-ids imageTag="$$IMAGE_TAG" \
+		--query 'imageDetails[0].imageDigest' --output text) && \
+	echo "$$DIGEST"
 
 
 # TERRAFORM LIFECYCLE

@@ -32,6 +32,9 @@ resource "aws_cloudwatch_event_rule" "object_created" {
       bucket = {
         name = [var.source_bucket_name]
       }
+      object = {
+        key = [{ prefix = "uploads/" }]
+      }
     }
   })
 }
@@ -110,4 +113,29 @@ data "aws_iam_policy_document" "extraction_dlq" {
 resource "aws_sqs_queue_policy" "extraction_dlq" {
   queue_url = aws_sqs_queue.extraction_dlq.id
   policy    = data.aws_iam_policy_document.extraction_dlq.json
+}
+
+resource "aws_cloudwatch_metric_alarm" "dlq_messages_visible" {
+  alarm_name          = "${aws_sqs_queue.extraction_dlq.name}-messages-visible"
+  alarm_description   = "Any message in the DLQ means a document exhausted maxReceiveCount=3 retries. The DLQ alarm is the single source of truth for failed messages."
+  namespace           = "AWS/SQS"
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  statistic           = "Maximum"
+  period              = 300
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    QueueName = aws_sqs_queue.extraction_dlq.name
+  }
+
+  alarm_actions = [var.alarm_topic_arn]
+  ok_actions    = [var.alarm_topic_arn]
+
+  tags = {
+    Environment = var.environment
+  }
 }

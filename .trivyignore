@@ -1,0 +1,5 @@
+# Lambda base image already runs as non-root (sbx_user); adding USER breaks the Runtime Interface Client.
+AVD-DS-0002
+
+# Lambda ignores HEALTHCHECK; runtime lifecycle is managed by AWS.
+AVD-DS-0026

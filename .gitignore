@@ -211,7 +211,4 @@ __marimo__/
 infra/tfplan.*
 infra/iam/iam.tfvars
 
-# Data
-static/
-
 .DS_Store
