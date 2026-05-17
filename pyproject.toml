@@ -25,6 +25,7 @@ dev = [
   "pytest-timeout>=2.4",
   "ruff>=0.15.12",
   "shellcheck-py>=0.11.0.1",
+  "tqdm>=4.67",
 ]
 
 [tool.uv]
@@ -41,6 +42,7 @@ files = [ "src", "tests" ]
 strict = true
 overrides = [
   { module = "tests.*", disallow_untyped_defs = false, disallow_any_expr = false, disable_error_code = [ "call-arg" ] },
+  { module = "tqdm", ignore_missing_imports = true },
   { module = "boto3", ignore_missing_imports = true },
   { module = "botocore.exceptions", ignore_missing_imports = true },
 ]

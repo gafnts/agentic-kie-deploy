@@ -11,16 +11,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import nda
 import pytest
+import tqdm
 
 pytestmark = pytest.mark.integration
 
-# A small NDA PDF shipped inside the kleister-nda-preparation package.
-_PDF_PATH = (
-    Path(nda.__file__).parent
-    / "static/data/documents/03efbda01358533c167ca9b1e6d72051.pdf"
-)
+_PDF_PATH = Path(__file__).parent / "static/smoke_document.pdf"
 
 
 class TestQueueSmoke:
@@ -41,24 +37,34 @@ class TestQueueSmoke:
 
         try:
             deadline = time.time() + 30
-            while time.time() < deadline:
-                resp = sqs.receive_message(
-                    QueueUrl=extraction_queue_url,
-                    WaitTimeSeconds=5,
-                    MaxNumberOfMessages=10,
-                )
-                for msg in resp.get("Messages", []):
-                    if key in msg["Body"]:
-                        sqs.delete_message(
+            prev = time.time()
+            with tqdm.tqdm(
+                total=30,
+                desc="S3 → SQS",
+                unit="s",
+                bar_format="{l_bar}{bar}| {n:.0f}/{total:.0f}s",
+            ) as bar:
+                while time.time() < deadline:
+                    resp = sqs.receive_message(
+                        QueueUrl=extraction_queue_url,
+                        WaitTimeSeconds=5,
+                        MaxNumberOfMessages=10,
+                    )
+                    for msg in resp.get("Messages", []):
+                        if key in msg["Body"]:
+                            sqs.delete_message(
+                                QueueUrl=extraction_queue_url,
+                                ReceiptHandle=msg["ReceiptHandle"],
+                            )
+                            return
+                        sqs.change_message_visibility(
                             QueueUrl=extraction_queue_url,
                             ReceiptHandle=msg["ReceiptHandle"],
+                            VisibilityTimeout=0,
                         )
-                        return
-                    sqs.change_message_visibility(
-                        QueueUrl=extraction_queue_url,
-                        ReceiptHandle=msg["ReceiptHandle"],
-                        VisibilityTimeout=0,
-                    )
+                    now = time.time()
+                    bar.update(now - prev)
+                    prev = now
             pytest.fail(f"no message referencing {key} arrived within 30s")
         finally:
             s3.delete_object(Bucket=ingestion_bucket, Key=key)
@@ -86,18 +92,30 @@ class TestExtractorSmoke:
 
         try:
             deadline = time.time() + 180
-            while time.time() < deadline:
-                item = table.get_item(
-                    Key={"document_id": doc_id}, ConsistentRead=True
-                ).get("Item")
-                if item and item.get("status") == "succeeded":
-                    assert item["extracted_fields"]["party"], (
-                        "extracted_fields.party should be non-empty"
-                    )
-                    return
-                if item and item.get("status") == "failed":
-                    pytest.fail(f"extraction failed: {item.get('error', {})}")
-                time.sleep(5)
+            prev = time.time()
+            with tqdm.tqdm(
+                total=180,
+                desc="S3 → Lambda → DynamoDB",
+                unit="s",
+                bar_format="{l_bar}{bar}| {n:.0f}/{total:.0f}s",
+            ) as bar:
+                while time.time() < deadline:
+                    item = table.get_item(
+                        Key={"document_id": doc_id}, ConsistentRead=True
+                    ).get("Item")
+                    status = item.get("status") if item else None
+                    bar.set_postfix_str(status or "pending")
+                    if status == "succeeded":
+                        assert item["extracted_fields"]["party"], (
+                            "extracted_fields.party should be non-empty"
+                        )
+                        return
+                    if status == "failed":
+                        pytest.fail(f"extraction failed: {item.get('error', {})}")
+                    time.sleep(5)
+                    now = time.time()
+                    bar.update(now - prev)
+                    prev = now
             pytest.fail(f"document {doc_id} did not reach 'succeeded' within 180s")
         finally:
             s3.delete_object(Bucket=ingestion_bucket, Key=key)

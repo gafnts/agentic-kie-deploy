@@ -6,7 +6,7 @@ ENV UV_COMPILE_BYTECODE=1
 ENV UV_PROJECT_ENVIRONMENT=/var/lang
 
 COPY pyproject.toml uv.lock ${LAMBDA_TASK_ROOT}/
-RUN uv sync --locked --no-dev --no-install-project
+RUN uv sync --locked --no-dev --no-install-project --inexact
 
 COPY handler.py schema.py ${LAMBDA_TASK_ROOT}/
 
