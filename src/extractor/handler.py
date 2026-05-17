@@ -247,9 +247,30 @@ def process_record(record: dict[str, Any]) -> str | None:
         )
         return message_id
 
+    logger.info(
+        {"step": "claimed", "document_id": document_id, "message_id": message_id}
+    )
+
     try:
+        logger.info(
+            {
+                "step": "extracting",
+                "document_id": document_id,
+                "bucket": bucket,
+                "key": key,
+            }
+        )
         result = extract(bucket, key, document_id)
+        logger.info(
+            {
+                "step": "extracted",
+                "document_id": document_id,
+                "processing_ms": result["processing_ms"],
+                "token_usage": result["token_usage"],
+            }
+        )
         complete(document_id, result)
+        logger.info({"step": "completed", "document_id": document_id})
         log(
             "succeeded",
             document_id=document_id,

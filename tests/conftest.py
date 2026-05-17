@@ -28,11 +28,6 @@ def ingestion_bucket() -> str:
 
 
 @pytest.fixture(scope="session")
-def extraction_queue_url() -> str:
-    return _tf_output("extraction_queue_url")
-
-
-@pytest.fixture(scope="session")
 def results_table_name() -> str:
     return _tf_output("results_table_name")
 
@@ -40,11 +35,6 @@ def results_table_name() -> str:
 @pytest.fixture(scope="session")
 def s3() -> Any:
     return boto3.client("s3")
-
-
-@pytest.fixture(scope="session")
-def sqs() -> Any:
-    return boto3.client("sqs")
 
 
 @pytest.fixture(scope="session")

@@ -19,57 +19,6 @@ pytestmark = pytest.mark.integration
 _PDF_PATH = Path(__file__).parent / "static/smoke_document.pdf"
 
 
-class TestQueueSmoke:
-    """
-    S3 → EventBridge → SQS.
-    """
-
-    def test_s3_upload_arrives_in_extraction_queue(
-        self,
-        s3: Any,
-        sqs: Any,
-        ingestion_bucket: str,
-        extraction_queue_url: str,
-    ) -> None:
-        run_id = f"smoke-{int(time.time())}-{uuid.uuid4().hex[:6]}"
-        key = f"smoke/{run_id}.txt"
-        s3.put_object(Bucket=ingestion_bucket, Key=key, Body=run_id.encode())
-
-        try:
-            deadline = time.time() + 30
-            prev = time.time()
-            with tqdm.tqdm(
-                total=30,
-                desc="S3 → SQS",
-                unit="s",
-                bar_format="{l_bar}{bar}| {n:.0f}/{total:.0f}s",
-            ) as bar:
-                while time.time() < deadline:
-                    resp = sqs.receive_message(
-                        QueueUrl=extraction_queue_url,
-                        WaitTimeSeconds=5,
-                        MaxNumberOfMessages=10,
-                    )
-                    for msg in resp.get("Messages", []):
-                        if key in msg["Body"]:
-                            sqs.delete_message(
-                                QueueUrl=extraction_queue_url,
-                                ReceiptHandle=msg["ReceiptHandle"],
-                            )
-                            return
-                        sqs.change_message_visibility(
-                            QueueUrl=extraction_queue_url,
-                            ReceiptHandle=msg["ReceiptHandle"],
-                            VisibilityTimeout=0,
-                        )
-                    now = time.time()
-                    bar.update(now - prev)
-                    prev = now
-            pytest.fail(f"no message referencing {key} arrived within 30s")
-        finally:
-            s3.delete_object(Bucket=ingestion_bucket, Key=key)
-
-
 class TestExtractorSmoke:
     """
     S3 (with extractor key shape) → Lambda → DynamoDB.

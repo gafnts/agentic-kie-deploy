@@ -32,6 +32,9 @@ resource "aws_cloudwatch_event_rule" "object_created" {
       bucket = {
         name = [var.source_bucket_name]
       }
+      object = {
+        key = [{ prefix = "uploads/" }]
+      }
     }
   })
 }
