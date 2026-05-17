@@ -4,16 +4,16 @@ requires-python = ">=3.13"
 
 [[package]]
 name = "agentic-kie"
-version = "0.5.1"
+version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "langchain" },
     { name = "pydantic" },
     { name = "pymupdf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/de/c1/38f6e9d5b852656fc1ff95c4999b0c5ef1de0ef7e0687fac13b88c65c7ab/agentic_kie-0.5.1.tar.gz", hash = "sha256:3a177a1463b4858ef5f1ebe91516e01664edfdbb480c615712a573eaff6bdb81", size = 848318, upload-time = "2026-04-12T19:28:13.168Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/62/b7/ea3789b9e8db0f6f360f76f8f2f23c1e397ab90ecfd0416a93a45a9cf347/agentic_kie-0.6.0.tar.gz", hash = "sha256:63b7559d49772a38f4c1263067c0a18992b8e903d80e4e06369535f9bc83f196", size = 850463, upload-time = "2026-05-17T03:14:34.845Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/84/6e/2d3d44082b7e3324b8e04b7deec35f8417d4b8f131e1a7a02b13dc330943/agentic_kie-0.5.1-py3-none-any.whl", hash = "sha256:aba755f76f4bc06cab815d331cca1a2ace06fbf43382833654ed26457ad487ec", size = 18565, upload-time = "2026-04-12T19:28:11.769Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/33/f1b45af374ab52ec0b434401f6e8e5673f39d32c86f5bbf094c863b30c88/agentic_kie-0.6.0-py3-none-any.whl", hash = "sha256:90af160b459de2658a0d302c13f6d3f396cf9e4b46ef7cb7d96c91f69ed91d26", size = 20322, upload-time = "2026-05-17T03:14:32.836Z" },
 ]
 
 [package.optional-dependencies]
@@ -268,7 +268,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentic-kie", extras = ["google"], specifier = ">=0.5.1" },
+    { name = "agentic-kie", extras = ["google"], specifier = ">=0.6" },
     { name = "aws-lambda-powertools", specifier = ">=3.29" },
     { name = "boto3", specifier = ">=1.43.7" },
 ]
