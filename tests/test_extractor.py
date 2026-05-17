@@ -263,6 +263,10 @@ class TestProcessRecord:
 
 
 class TestHandler:
+    @pytest.fixture(autouse=True)
+    def _patch_bootstrap(self, monkeypatch):
+        monkeypatch.setattr(handler, "_bootstrap_secrets", MagicMock())
+
     def test_empty_records_returns_empty_failures(self, monkeypatch):
         fake_ls = MagicMock()
         monkeypatch.setattr(handler, "_ls_client", lambda: fake_ls)

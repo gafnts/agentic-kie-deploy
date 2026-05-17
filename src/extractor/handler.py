@@ -296,6 +296,7 @@ def process_record(record: dict[str, Any]) -> str | None:
 @logger.inject_lambda_context
 def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     """Lambda entry point: process each SQS record and return batch item failures."""
+    _bootstrap_secrets()
     failures: list[dict[str, str]] = []
     try:
         for record in event.get("Records", []):
