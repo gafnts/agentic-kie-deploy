@@ -1,9 +1,9 @@
 output "ingestion_bucket_name" {
-  value = module.storage.bucket_name
+  value = module.bucket.bucket_name
 }
 
 output "ingestion_bucket_arn" {
-  value = module.storage.bucket_arn
+  value = module.bucket.bucket_arn
 }
 
 output "extraction_queue_url" {

@@ -224,7 +224,7 @@ module "extractor" {
   architecture            = "arm64"
   max_concurrency         = var.environment == "prod" ? 25 : 10
   queue_arn               = module.queue.queue_arn
-  ingestion_bucket_arn    = module.storage.bucket_arn
+  ingestion_bucket_arn    = module.bucket.bucket_arn
   results_table_arn       = module.table.table_arn
   llm_provider_secret_arn = var.llm_provider_secret_arn
   langsmith_secret_arn    = var.langsmith_secret_arn
@@ -240,7 +240,7 @@ And the queue wiring is updated to pass through the function's timeout, removing
 module "queue" {
   source                 = "./modules/queue"
   name                   = "${var.project_name}-${var.environment}-extraction"
-  source_bucket_name     = module.storage.bucket_name
+  source_bucket_name     = module.bucket.bucket_name
   lambda_timeout_seconds = module.extractor.timeout_seconds
 }
 ```

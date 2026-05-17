@@ -16,7 +16,7 @@
 
 - [Architecture](#architecture)
 - [Modules](#modules)
-  - [Storage](#storage)
+  - [Bucket](#bucket)
   - [Queue](#queue)
   - [Table](#table)
   - [Extractor](#extractor)
@@ -48,13 +48,13 @@ The infrastructure is organized as small, per-concern Terraform modules wired to
 
 | Module | Path | Status |
 |---|---|---|
-| `storage` | [infra/modules/storage/](infra/modules/storage/) | Implemented |
+| `bucket` | [infra/modules/bucket/](infra/modules/bucket/) | Implemented |
 | `queue` | [infra/modules/queue/](infra/modules/queue/) | Implemented |
 | `table` | [infra/modules/table/](infra/modules/table/) | Implemented |
 | `extractor` | [infra/modules/extractor/](infra/modules/extractor/) | Implemented |
 | `uploader` | [infra/modules/uploader/](infra/modules/uploader/) | Planned |
 
-### Storage
+### Bucket
 
 The ingestion bucket is the entry point of the pipeline. Clients upload documents directly via pre-signed PUT URLs, and the bucket forwards `Object Created` events to EventBridge for downstream routing. The bucket is locked down through four orthogonal hardening layers:
 
@@ -99,7 +99,7 @@ The results table is the system of record for extractions. The extractor writes 
 | Partition key | `document_id` (UUIDv7) | Stable across SQS redeliveries, so retries land on the same row and conditional writes can enforce idempotency |
 | Sort key | None | One canonical row per document; extraction history is not a current requirement |
 | Billing mode | `PAY_PER_REQUEST` | No capacity planning at portfolio scale; absorbs bursts without throttling |
-| Encryption | SSE with AWS-managed KMS key (`aws/dynamodb`) | Free in DynamoDB, adds basic CloudTrail visibility on the encryption context, parity with the storage module's posture |
+| Encryption | SSE with AWS-managed KMS key (`aws/dynamodb`) | Free in DynamoDB, adds basic CloudTrail visibility on the encryption context, parity with the bucket module's posture |
 | Point-in-time recovery | Enabled in both `staging` and `prod` | Cheap insurance against accidental writes or deletes; keeps environments configuration-symmetric |
 | TTL | Enabled on `ttl` attribute (unused at MVP) | Retention knob available without a future migration |
 | Deletion protection | `prod` only | Prod is protected from accidental destroy; `staging` stays destroyable so `make destroy` works in the iteration loop |

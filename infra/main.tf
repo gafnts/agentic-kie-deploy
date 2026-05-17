@@ -29,8 +29,8 @@ locals {
   extractor_timeout_seconds = 120
 }
 
-module "storage" {
-  source                 = "./modules/storage"
+module "bucket" {
+  source                 = "./modules/bucket"
   bucket_name            = local.bucket_name
   allowed_upload_origins = var.allowed_upload_origins
   force_destroy          = var.environment != "prod"
@@ -39,7 +39,7 @@ module "storage" {
 module "queue" {
   source                 = "./modules/queue"
   name                   = "${var.project_name}-${var.environment}-extraction"
-  source_bucket_name     = module.storage.bucket_name
+  source_bucket_name     = module.bucket.bucket_name
   lambda_timeout_seconds = local.extractor_timeout_seconds
 }
 
@@ -59,7 +59,7 @@ module "extractor" {
   architecture            = "arm64"
   max_concurrency         = var.environment == "prod" ? 25 : 10
   queue_arn               = module.queue.queue_arn
-  ingestion_bucket_arn    = module.storage.bucket_arn
+  ingestion_bucket_arn    = module.bucket.bucket_arn
   results_table_arn       = module.table.table_arn
   results_table_name      = module.table.table_name
   llm_provider_secret_arn = data.aws_secretsmanager_secret.llm_provider.arn
