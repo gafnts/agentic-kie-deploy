@@ -101,3 +101,8 @@ variable "environment" {
   description = "Deployment environment (local, staging, prod). Used for the Environment tag the iam/ stack's DenyTouchingOtherEnvs guard reads."
   type        = string
 }
+
+variable "alarm_topic_arn" {
+  description = "ARN of the SNS topic that function-level CloudWatch alarms publish to. The topic lives in the alarms module so the alerting plane is one resource per env."
+  type        = string
+}

@@ -136,3 +136,53 @@ resource "aws_lambda_event_source_mapping" "extraction" {
     maximum_concurrency = var.max_concurrency
   }
 }
+
+resource "aws_cloudwatch_metric_alarm" "errors" {
+  alarm_name          = "${var.function_name}-errors"
+  alarm_description   = "Lambda invocations that ended in an unhandled exception. With maxReceiveCount=3 on the queue, a single bad document fires this up to three times before it lands in the DLQ — the alarm is the early-warning signal that the DLQ alarm is the confirmation of."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.extractor.function_name
+  }
+
+  alarm_actions = [var.alarm_topic_arn]
+  ok_actions    = [var.alarm_topic_arn]
+
+  tags = {
+    Environment = var.environment
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "throttles" {
+  alarm_name          = "${var.function_name}-throttles"
+  alarm_description   = "Invocations rejected because the function hit its concurrency cap. With maximum_concurrency set on the event source mapping, throttles mean ingestion is exceeding the planned LLM fan-out budget; either the cap is wrong or there is a burst worth investigating."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Throttles"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.extractor.function_name
+  }
+
+  alarm_actions = [var.alarm_topic_arn]
+  ok_actions    = [var.alarm_topic_arn]
+
+  tags = {
+    Environment = var.environment
+  }
+}

@@ -29,6 +29,13 @@ locals {
   extractor_timeout_seconds = 120
 }
 
+module "alarms" {
+  source         = "./modules/alarms"
+  topic_name     = "${var.project_name}-${var.environment}-alarms"
+  email_endpoint = var.alarm_email
+  environment    = var.environment
+}
+
 module "bucket" {
   source                 = "./modules/bucket"
   bucket_name            = local.bucket_name
@@ -41,6 +48,8 @@ module "queue" {
   name                   = "${var.project_name}-${var.environment}-extraction"
   source_bucket_name     = module.bucket.bucket_name
   lambda_timeout_seconds = local.extractor_timeout_seconds
+  alarm_topic_arn        = module.alarms.topic_arn
+  environment            = var.environment
 }
 
 module "table" {
@@ -68,4 +77,5 @@ module "extractor" {
   langsmith_project       = "${var.project_name}-${var.environment}"
   log_retention_days      = var.environment == "prod" ? 30 : 14
   environment             = var.environment
+  alarm_topic_arn         = module.alarms.topic_arn
 }

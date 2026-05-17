@@ -20,6 +20,8 @@
   - [Queue](#queue)
   - [Table](#table)
   - [Extractor](#extractor)
+  - [Alarms](#alarms)
+- [Observability](#observability)
 - [Contributing](#contributing)
 - [Architecture decisions](docs/adr/README.md)
 
@@ -52,6 +54,7 @@ The infrastructure is organized as small, per-concern Terraform modules wired to
 | `queue` | [infra/modules/queue/](infra/modules/queue/) | Implemented |
 | `table` | [infra/modules/table/](infra/modules/table/) | Implemented |
 | `extractor` | [infra/modules/extractor/](infra/modules/extractor/) | Implemented |
+| `alarms` | [infra/modules/alarms/](infra/modules/alarms/) | Implemented |
 | `uploader` | [infra/modules/uploader/](infra/modules/uploader/) | Planned |
 
 ### Bucket
@@ -130,6 +133,48 @@ The Lambda holds no encryption story of its own: environment variables are encry
 
 > [!NOTE]
 > LLM telemetry ships to **LangSmith** (SaaS) at MVP — purpose-built UI, zero infrastructure cost at portfolio scale, OTel-GenAI-compatible migration path to a self-hosted Langfuse or Phoenix when real data lands. See ADR-0009's "Observability" section for the migration boundary.
+
+### Alarms
+
+The alarms module owns the alerting plane: one SNS topic per environment, plus an optional email subscription, that every CloudWatch alarm in the stack publishes to. Function-level and queue-level alarms live next to the resources they watch (extractor module, queue module) and reference this topic by ARN, so the alerting fan-out is one resource rather than one-per-alarm.
+
+| Lever | Value | What it controls |
+|---|---|---|
+| Topic encryption | SSE with AWS-managed KMS key (`alias/aws/sns`) | At-rest encryption for any message body the topic ever holds, parity with the rest of the data path |
+| Email subscription | Optional (`alarm_email` tfvar; null disables) | Local/dev runs without notifications; staging/prod set the address per environment. Subscriptions require manual confirmation from the recipient's inbox before delivery starts |
+| Topic policy | AWS default (account-only publish) | CloudWatch in the same account can publish without an explicit policy; no cross-account fan-out at this scope |
+
+---
+
+## Observability
+
+The pipeline's observability splits cleanly into two backends, each scoped to what it's good at:
+
+| Concern | Backend | Cadence | What it answers |
+|---|---|---|---|
+| Operational telemetry | CloudWatch Logs + Alarms → SNS | Minute-to-hour, during incidents | Did the function run? Did it error? Is the DLQ filling up? Is concurrency throttling? |
+| LLM telemetry | LangSmith (SaaS) | Week-to-month, during prompt iteration | What did the model see? What did it say? Token usage, schema-validation outcomes, agent tool calls |
+
+The two share a `document_id` correlation key but otherwise have nothing in common; trying to serve both from a single backend compromises both. See [ADR-0009](docs/adr/0009-extractor-lambda.md)'s "Observability" section for the full reasoning, and the [LangSmith NOTE](#extractor) above for the data-residency tradeoff and migration path.
+
+### Alarms
+
+Three CloudWatch alarms cover the operational hot path. All three are 1-of-1 5-minute evaluations, treat missing data as `notBreaching` (idle infrastructure is not a failure), and publish to the alarms module's SNS topic on both alarm and OK transitions.
+
+| Alarm | Source | Fires when | Why it matters |
+|---|---|---|---|
+| `${function}-errors` | `AWS/Lambda` `Errors` (Sum) | `> 0` over 5 min | Any unhandled exception. With `maxReceiveCount = 3` on the queue, a single bad document fires this up to three times before it lands in the DLQ — the early-warning signal that the DLQ alarm is the confirmation of |
+| `${function}-throttles` | `AWS/Lambda` `Throttles` (Sum) | `> 0` over 5 min | Invocations rejected because the function hit its `maximum_concurrency` cap. Throttles mean ingestion is exceeding the planned LLM fan-out budget; either the cap is wrong or there's a burst worth investigating |
+| `${dlq}-messages-visible` | `AWS/SQS` `ApproximateNumberOfMessagesVisible` (Max) on the DLQ | `> 0` over 5 min | A message in the DLQ means a document exhausted its three retries. The DLQ is the single source of truth for failed messages (ADR-0005); this alarm is the page on it |
+
+`IteratorAge` is intentionally not wired — it's a Kinesis/DDB Streams metric, not an SQS-Lambda one. `ConcurrentExecutions` is not wired either; it overlaps the Throttles signal at this scale.
+
+### Paging integration (deferred)
+
+The SNS topic accepts an email subscription today; routing to PagerDuty, Opsgenie, or a Slack webhook is deliberately out of scope. At portfolio scale there is no on-call rotation; email subscription is enough to demonstrate the wiring and exercise the alarm → notification path end-to-end. The migration is mechanical when it matters: swap `protocol = "email"` for an `https` subscription pointing at the upstream integration's webhook URL, or add a Lambda subscriber that transforms the SNS payload into the upstream's API shape. The alarms themselves do not change; only the topic's subscriptions do.
+
+> [!NOTE]
+> Email subscriptions require the recipient to confirm the SNS subscription from their inbox the first time the topic is created. `terraform apply` does not block on confirmation, and unconfirmed subscriptions stay in `PendingConfirmation` indefinitely without delivering — worth checking after the first deploy in a new environment.
 
 ---
 

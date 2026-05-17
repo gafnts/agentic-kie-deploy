@@ -303,3 +303,43 @@ Neutral:
 - **Arize Phoenix at MVP.** Same as Langfuse — strong tool, deferred for the same reason. Equally viable as the Phase-2 target; the choice between Langfuse and Phoenix is one for the future ADR.
 - **OpenTelemetry GenAI conventions instrumented at MVP, shipped to CloudWatch.** Considered — would maximize backend portability up-front, but requires running an OTel collector and building the CloudWatch sink ourselves. LangSmith's SDK accomplishes the same instrumentation with one decorator and offers OTel export as a migration path, so the portability is preserved without the up-front collector work.
 - **Synchronous LangSmith mode** (rather than batched-with-explicit-flush). Rejected — adds 50–200 ms of network round-trip to every invocation, when an explicit flush in a `finally` block pays the same cost once at the end of the handler.
+
+## Post-implementation
+
+### Observability alarms
+
+The Observability section above deferred function-level and queue-level alarms to "the same future observability ADR that ADR-0005 deferred queue alarms to." Both deferrals are closed here rather than as a third ADR. The alarm shapes were always tightly coupled — Lambda errors push queue depth up; queue depth is the confirmation that errors were not transient — and splitting them across two ADRs would have been ceremony, not separation of concerns.
+
+#### Stack layout
+
+A new `infra/modules/alarms/` module owns the alerting plane: one SNS topic per environment plus an optional email subscription. The alarms themselves live next to the resources they watch — Lambda alarms in the extractor module, DLQ alarm in the queue module — and reference the topic by ARN. The split is deliberate: each business module owns the operational signal for the resource it provisions, and the alerting fan-out is a single shared resource at the root.
+
+`infra/variables.tf` gains:
+
+```hcl
+variable "alarm_email" {
+  description = "Email address subscribed to the alarm SNS topic. Null disables the subscription; the topic still exists and alarms still fire, they just route nowhere."
+  type        = string
+  default     = null
+}
+```
+
+The subscription is `count`-gated so `local` runs without notifications (the default) while `staging` and `prod` set the address per environment in their tfvars. The topic itself always exists; alarms have somewhere to publish in every environment regardless of subscription state.
+
+#### Alarm shapes
+
+| Alarm | Module | Metric / namespace | Threshold | Why this shape |
+|---|---|---|---|---|
+| `${function_name}-errors` | extractor | `AWS/Lambda` `Errors` (Sum) | `> 0` over 5 min | Catches unhandled exceptions on the hot path. With `maxReceiveCount = 3` a single bad document fires the metric up to three times before it lands in the DLQ; this alarm is the early-warning signal that the DLQ alarm is the confirmation of |
+| `${function_name}-throttles` | extractor | `AWS/Lambda` `Throttles` (Sum) | `> 0` over 5 min | `maximum_concurrency` is the cap on parallel LLM fan-out; any throttle means ingestion is exceeding the planned budget. Either the cap is wrong or there is a burst worth investigating |
+| `${dlq_name}-messages-visible` | queue | `AWS/SQS` `ApproximateNumberOfMessagesVisible` (Max) on the DLQ | `> 0` over 5 min | The DLQ is the single source of truth for failed messages (ADR-0005). Any depth means a document exhausted its three retries |
+
+All three are 1-of-1 5-minute evaluations and treat missing data as `notBreaching` — an idle pipeline is not a failure. The alarms publish on both alarm and OK transitions; a transient failure that recovers within the period sends both notifications, which is the right behavior when a human is reading email rather than watching a dashboard.
+
+Two metrics from the original deferral list did not make it in:
+
+- **`IteratorAge`.** Does not apply to SQS-Lambda event source mappings; it is a Kinesis/DDB-Streams metric. Listed in the original deferral by reflex.
+- **`ConcurrentExecutions`.** Considered and rejected. It overlaps the `Throttles` signal at this scale, and `maximum_concurrency` already bounds concurrency by construction at 10/25 — not the account-wide 1,000 default — so there is no useful threshold between "everything is fine" and "throttles fire."
+
+> [!NOTE]
+> Email subscriptions require the recipient to confirm the SNS subscription from their inbox the first time the topic is created. `terraform apply` does not block on confirmation, and unconfirmed subscriptions stay in `PendingConfirmation` indefinitely without delivering — worth checking after the first deploy in a new environment.

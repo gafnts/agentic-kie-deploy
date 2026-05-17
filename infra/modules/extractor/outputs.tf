@@ -18,3 +18,11 @@ output "timeout_seconds" {
   description = "Echoed back so the queue module can derive its visibility timeout from the same value (ADR-0005)."
   value       = aws_lambda_function.extractor.timeout
 }
+
+output "errors_alarm_arn" {
+  value = aws_cloudwatch_metric_alarm.errors.arn
+}
+
+output "throttles_alarm_arn" {
+  value = aws_cloudwatch_metric_alarm.throttles.arn
+}

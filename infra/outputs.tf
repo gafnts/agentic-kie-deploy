@@ -37,3 +37,7 @@ output "extractor_function_arn" {
 output "extractor_log_group_name" {
   value = module.extractor.log_group_name
 }
+
+output "alarm_topic_arn" {
+  value = module.alarms.topic_arn
+}

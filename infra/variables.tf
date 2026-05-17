@@ -36,3 +36,9 @@ variable "extractor_image_digest" {
     error_message = "extractor_image_digest must be a sha256 digest, e.g. sha256:abc...123."
   }
 }
+
+variable "alarm_email" {
+  description = "Email address subscribed to the alarm SNS topic. Leave null to skip the subscription (alarms still fire in CloudWatch, they just don't notify anyone). The recipient must confirm the subscription from their inbox before delivery starts."
+  type        = string
+  default     = null
+}

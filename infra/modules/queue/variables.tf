@@ -18,3 +18,13 @@ variable "max_receive_count" {
   type        = number
   default     = 3
 }
+
+variable "alarm_topic_arn" {
+  description = "ARN of the SNS topic that the DLQ depth alarm publishes to. The topic lives in the alarms module so the alerting plane is one resource per env."
+  type        = string
+}
+
+variable "environment" {
+  description = "Deployment environment. Surfaces on the alarm tag the iam/ stack's DenyTouchingOtherEnvs guard reads."
+  type        = string
+}
