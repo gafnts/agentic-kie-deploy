@@ -27,6 +27,7 @@ from botocore.exceptions import ClientError
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langsmith import Client as LangSmithClient
 from langsmith import traceable
+from langsmith.run_trees import get_cached_client
 from schema import NDA
 
 logger = Logger()
@@ -76,9 +77,9 @@ def _extractor() -> SinglePassExtractor[NDA]:
 
 @cache
 def _ls_client() -> LangSmithClient:
-    """Construct the LangSmith client after the API key env var is hydrated."""
+    """Return the singleton LangSmith client used by ``@traceable`` so flushing drains its queue."""
     _bootstrap_secrets()
-    return LangSmithClient()
+    return get_cached_client()
 
 
 def parse_document_id(key: str) -> str | None:

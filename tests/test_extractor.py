@@ -422,17 +422,17 @@ class TestInfrastructureGetters:
         model_ctor.assert_called_once_with(model="gemini-fake")
         ext_ctor.assert_called_once_with(model=fake_model, schema=NDA)
 
-    def test_ls_client_bootstraps_then_builds_client(self, monkeypatch):
+    def test_ls_client_bootstraps_then_returns_cached_singleton(self, monkeypatch):
         bootstrap = MagicMock()
         monkeypatch.setattr(handler, "_bootstrap_secrets", bootstrap)
 
         fake_ls = MagicMock()
-        ctor = MagicMock(return_value=fake_ls)
-        monkeypatch.setattr(handler, "LangSmithClient", ctor)
+        getter = MagicMock(return_value=fake_ls)
+        monkeypatch.setattr(handler, "get_cached_client", getter)
 
         assert handler._ls_client() is fake_ls
         bootstrap.assert_called_once()
-        ctor.assert_called_once_with()
+        getter.assert_called_once_with()
 
 
 class TestExtract:
