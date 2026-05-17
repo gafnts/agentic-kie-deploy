@@ -27,6 +27,7 @@ This repo contains the Terraform infrastructure for the Agentic KIE project, dep
   - [Configure your local AWS profile](#configure-your-local-aws-profile)
 - [Day-to-day workflow](#day-to-day-workflow)
   - [Local iteration](#local-iteration)
+  - [Manual smoke test](#manual-smoke-test)
   - [Quality gates](#quality-gates)
   - [Opening a PR](#opening-a-pr)
   - [Promoting to prod](#promoting-to-prod)
@@ -239,6 +240,34 @@ make destroy ENV=local   # Tear down all local resources
 
 > [!IMPORTANT]
 > `make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1` — only CI is allowed to set that. `make destroy` only tears down the service stack; the ECR repository in `infra/registry/` has its own lifecycle and a separate `make registry-destroy ENV=<env>` command (same guards apply — prefer it over invoking `terraform destroy` directly inside `infra/registry/`).
+
+### Manual smoke test
+
+After applying infrastructure, you can verify the full extraction pipeline end-to-end using only the AWS CLI.
+
+```bash
+# 1. Capture terraform outputs
+BUCKET=$(terraform -chdir=infra output -raw ingestion_bucket_name)
+TABLE=$(terraform -chdir=infra output -raw results_table_name)
+FUNCTION=$(terraform -chdir=infra output -raw extractor_function_name)
+
+# 2. Upload a PDF
+DOC_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+aws s3 cp tests/static/smoke_document.pdf \
+  "s3://$BUCKET/uploads/$(date +%Y/%m/%d)/$DOC_ID"
+
+# 3. Watch Lambda logs in real time
+aws logs tail "/aws/lambda/$FUNCTION" --follow
+
+# 4. Check DynamoDB for the result
+aws dynamodb get-item \
+  --table-name "$TABLE" \
+  --key "{\"document_id\":{\"S\":\"$DOC_ID\"}}" \
+  --consistent-read
+```
+
+> [!NOTE]
+> `make smoke` runs the same pipeline automatically via pytest (with a progress bar and a 180-second timeout). Use the manual steps above when you want to observe log output in real time or inspect the raw DynamoDB item.
 
 ### Quality gates
 
