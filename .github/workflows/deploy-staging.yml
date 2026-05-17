@@ -31,6 +31,7 @@ env:
   ENV: staging
   AWS_REGION: us-east-1
   TF_VERSION: 1.15.0
+  PYTHON_VERSION: "3.13"
 
 jobs:
   plan:
@@ -250,6 +251,14 @@ jobs:
           terraform -chdir=infra apply -auto-approve \
             -var-file=envs/${{ env.ENV }}.tfvars \
             -var=extractor_image_digest=${{ needs.build-and-push.outputs.image_digest }}
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --all-groups
 
       - name: Smoke test
         run: make smoke
