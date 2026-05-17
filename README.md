@@ -3,7 +3,7 @@
   <strong>Serverless, event-driven AWS infrastructure for asynchronous key information extraction with LLMs.</strong>
 </p>
 <p align="center">
-<a href="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-dev.yml"><img src="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-dev.yml/badge.svg" alt="Deploy dev"></a>
+<a href="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-staging.yml"><img src="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-staging.yml/badge.svg" alt="Deploy staging"></a>
 <a href="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-prod.yml"><img src="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-prod.yml/badge.svg" alt="Deploy prod"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
 </p>
@@ -100,9 +100,9 @@ The results table is the system of record for extractions. The extractor writes 
 | Sort key | None | One canonical row per document; extraction history is not a current requirement |
 | Billing mode | `PAY_PER_REQUEST` | No capacity planning at portfolio scale; absorbs bursts without throttling |
 | Encryption | SSE with AWS-managed KMS key (`aws/dynamodb`) | Free in DynamoDB, adds basic CloudTrail visibility on the encryption context, parity with the storage module's posture |
-| Point-in-time recovery | Enabled in both `dev` and `prod` | Cheap insurance against accidental writes or deletes; keeps environments configuration-symmetric |
+| Point-in-time recovery | Enabled in both `staging` and `prod` | Cheap insurance against accidental writes or deletes; keeps environments configuration-symmetric |
 | TTL | Enabled on `ttl` attribute (unused at MVP) | Retention knob available without a future migration |
-| Deletion protection | `prod` only | Prod is protected from accidental destroy; `dev` stays destroyable so `make destroy` works in the iteration loop |
+| Deletion protection | `prod` only | Prod is protected from accidental destroy; `staging` stays destroyable so `make destroy` works in the iteration loop |
 | Streams | Disabled | No change-driven consumer today; enabling later is non-breaking |
 
 Idempotency is split between this module and the extractor: the schema's job is to make retries collide on the same partition key, and the extractor's job is to use conditional writes so a redelivered message cannot clobber a terminal row.
@@ -120,11 +120,11 @@ The extractor is a container-image Lambda that consumes the extraction queue, ru
 | Memory / `/tmp` | 2048 MB each | Holds the container image + transitive libraries; vCPU allocation scales with memory |
 | Architecture | `arm64` | ~20% cheaper per GB-second on Graviton; native build on `ubuntu-24.04-arm` so no QEMU emulation |
 | `batch_size` | 1 | Per-invocation cost is dominated by the LLM call, so batching does not amortize anything and one-message batches keep the failure model simple |
-| `maximum_concurrency` | 10 (dev/local), 25 (prod) | Caps parallel LLM fan-out under an ingestion burst, closing the deferral ADR-0005 made |
+| `maximum_concurrency` | 10 (staging/local), 25 (prod) | Caps parallel LLM fan-out under an ingestion burst, closing the deferral ADR-0005 made |
 | Idempotency | Conditional `PutItem` + status-guarded `UpdateItem` | At-least-once SQS delivery cannot clobber a terminal row; redelivered terminal messages are a no-op |
 | Cold-start | No provisioned concurrency | Async polling model hides the 3–10s container-image cold start from the user |
 | Networking | No VPC | Talks only to AWS APIs and external HTTPS endpoints; no NAT cost, no ENI cold-start penalty |
-| Logs | 14d (dev/local), 30d (prod) | Operational telemetry only — LLM telemetry goes to LangSmith |
+| Logs | 14d (staging/local), 30d (prod) | Operational telemetry only — LLM telemetry goes to LangSmith |
 
 The Lambda holds no encryption story of its own: environment variables are encrypted with the AWS-managed Lambda key, parity with the rest of the data path. Secrets (LLM provider key, LangSmith key) live in Secrets Manager, one per environment, fetched once at cold start.
 

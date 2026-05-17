@@ -1,6 +1,6 @@
 # Contributing
 
-This repo contains the Terraform infrastructure for the Agentic KIE project, deployed to AWS across three environments (`local`, `dev`, `prod`). Contributing means authoring Terraform. Infrastructure changes trigger a CI-generated plan on every PR so reviewers can see exactly what would land; production additionally gates the apply on a manual approval against a saved plan generated post-merge.
+This repo contains the Terraform infrastructure for the Agentic KIE project, deployed to AWS across three environments (`local`, `staging`, `prod`). Contributing means authoring Terraform. Infrastructure changes trigger a CI-generated plan on every PR so reviewers can see exactly what would land; production additionally gates the apply on a manual approval against a saved plan generated post-merge.
 
 > [!IMPORTANT]
 > This project requires:
@@ -45,7 +45,7 @@ The project has three deployment environments, all in the same AWS account:
 | Environment | Who deploys | When |
 |---|---|---|
 | `local` | You, from your laptop | Iterating on infrastructure changes |
-| `dev` | GitHub Actions | On merge to `develop` |
+| `staging` | GitHub Actions | On merge to `develop` |
 | `prod` | GitHub Actions | On merge to `main`, gated by manual approval |
 
 > [!NOTE]
@@ -53,13 +53,13 @@ The project has three deployment environments, all in the same AWS account:
 
 ### Branch model
 
-Two long-lived branches map to the two CI-managed environments: `develop` drives `dev`, `main` drives `prod`. Every change flows through a PR with a plan attached, and prod additionally waits on a manual approval before the saved plan is applied.
+Two long-lived branches map to the two CI-managed environments: `develop` drives `staging`, `main` drives `prod`. Every change flows through a PR with a plan attached, and prod additionally waits on a manual approval before the saved plan is applied.
 
 ```mermaid
 flowchart LR
     feature[Feature branch] -->|PR| develop[develop]
-    develop -->|CI plans dev| planDev{{Plan dev}}
-    planDev -->|merge| applyDev[CI applies dev]
+    develop -->|CI plans staging| planStaging{{Plan staging}}
+    planStaging -->|merge| applyStaging[CI applies staging]
 
     develop -->|PR| main[main]
     main -->|CI plans prod| planProd{{Plan prod}}
@@ -69,7 +69,7 @@ flowchart LR
 ```
 
 > [!NOTE]
-> The dev and prod apply jobs are not symmetric. Dev runs `terraform apply` directly against current state at merge time — the PR plan is informational, not the artifact applied. This is intentional: dev is the iteration environment, and the simplification is a reasonable trade-off. Prod is plan-bound: a new plan is generated post-merge, saved as an artifact, and that exact artifact is what gets applied after approval.
+> The staging and prod apply jobs are not symmetric. Staging runs `terraform apply` directly against current state at merge time — the PR plan is informational, not the artifact applied. This is intentional: staging is the iteration environment, and the simplification is a reasonable trade-off. Prod is plan-bound: a new plan is generated post-merge, saved as an artifact, and that exact artifact is what gets applied after approval.
 
 ## First-time setup
 
@@ -113,7 +113,7 @@ The bucket is private, versioned, encrypted, and uses S3 native locking (`use_lo
 
 ### Create the IAM roles
 
-The three deploy roles (`local`, `dev`, `prod`) live in a separate Terraform root at `infra/iam/`. They're applied once with admin credentials and rarely touched afterward.
+The three deploy roles (`local`, `staging`, `prod`) live in a separate Terraform root at `infra/iam/`. They're applied once with admin credentials and rarely touched afterward.
 
 ```bash
 make iam-init && make iam-apply
@@ -127,14 +127,14 @@ The extractor Lambda is a container image, so the ECR repository must exist befo
 
 ```bash
 make registry-init ENV=local && make registry-apply ENV=local
-make registry-init ENV=dev   && make registry-apply ENV=dev
+make registry-init ENV=staging && make registry-apply ENV=staging
 make registry-init ENV=prod  && make registry-apply ENV=prod
 ```
 
 The repository is named `agentic-kie-deploy-<env>-extractor`, has tag immutability on, scan-on-push enabled, and a lifecycle policy that keeps the last ten tagged images and expires untagged images after a day. Each env writes to its own state file (`service/<env>/registry.tfstate`).
 
 > [!TIP]
-> For local-only setup, `make provision` chains `iam-init`/`iam-apply`, `registry-init`/`registry-apply`, and the service-stack `init` in one shot. The `dev` and `prod` registries still need their own `registry-init`/`registry-apply` runs, since `provision` only covers `ENV=local`.
+> For local-only setup, `make provision` chains `iam-init`/`iam-apply`, `registry-init`/`registry-apply`, and the service-stack `init` in one shot. The `staging` and `prod` registries still need their own `registry-init`/`registry-apply` runs, since `provision` only covers `ENV=local`.
 
 > [!NOTE]
 > The service stack consumes the repository via a `data "aws_ecr_repository"` lookup in the extractor module. If `make plan` later fails with `couldn't find resource`, the registry stack has not been applied for that env.
@@ -151,7 +151,7 @@ aws secretsmanager create-secret \
   --name agentic-kie-deploy/local/llm-provider \
   --secret-string '<your-llm-provider-key>'
 aws secretsmanager create-secret \
-  --name agentic-kie-deploy/dev/llm-provider \
+  --name agentic-kie-deploy/staging/llm-provider \
   --secret-string '<your-llm-provider-key>'
 aws secretsmanager create-secret \
   --name agentic-kie-deploy/prod/llm-provider \
@@ -162,7 +162,7 @@ aws secretsmanager create-secret \
   --name agentic-kie-deploy/local/langsmith \
   --secret-string '<your-langsmith-key>'
 aws secretsmanager create-secret \
-  --name agentic-kie-deploy/dev/langsmith \
+  --name agentic-kie-deploy/staging/langsmith \
   --secret-string '<your-langsmith-key>'
 aws secretsmanager create-secret \
   --name agentic-kie-deploy/prod/langsmith \
@@ -183,7 +183,7 @@ In the repo settings:
 - This is what gates the prod apply step.
 
 **Settings → Secrets and variables → Actions → Variables (Repository tab)**
-- `AWS_ROLE_ARN_DEV` = `<dev_role_arn>` from the Terraform output
+- `AWS_ROLE_ARN_STAGING` = `<staging_role_arn>` from the Terraform output
 - `AWS_ROLE_ARN_PROD_PLAN` = `<prod_plan_role_arn>` from the Terraform output (used by plan jobs on PRs and post-merge, plus the pre-apply build-and-push job; read-only except for scoped ECR push to the extractor repository)
 - `AWS_ROLE_ARN_PROD` = `<prod_role_arn>` from the Terraform output (write; used by the apply job only)
 
@@ -269,9 +269,9 @@ git switch -c feature/my-change
 git push -u origin feature/my-change
 ```
 
-CI runs the dev workflow. Within a minute the PR gets a sticky comment titled **"Terraform Plan · `dev`"** showing what would be applied. Review the plan as part of code review.
+CI runs the staging workflow. Within a minute the PR gets a sticky comment titled **"Terraform Plan · `staging`"** showing what would be applied. Review the plan as part of code review.
 
-Merge the PR. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first — it builds the container image, pushes it to the dev ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Service-only changes (Terraform tweaks, IAM tightening) skip the Docker work and re-apply with the previously-deployed digest. Either way, CI applies the changes to dev automatically, then runs `make smoke` as a post-apply ingress check (S3 → EventBridge → SQS); a smoke failure fails the workflow.
+Merge the PR. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first — it builds the container image, pushes it to the staging ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Service-only changes (Terraform tweaks, IAM tightening) skip the Docker work and re-apply with the previously-deployed digest. Either way, CI applies the changes to staging automatically, then runs `make smoke` as a post-apply ingress check (S3 → EventBridge → SQS); a smoke failure fails the workflow.
 
 ### Promoting to prod
 
@@ -343,7 +343,7 @@ You only need to touch `infra/iam/` when:
 | `make ci-apply` | Apply saved plan `tfplan.<env>` (used by CI for prod) |
 | `make destroy` | Destroy all infrastructure for `ENV` (requires explicit `ENV`; refuses prod unless `I_KNOW=1`) |
 
-`ENV` defaults to `local`. Override with `make plan ENV=dev`, etc.
+`ENV` defaults to `local`. Override with `make plan ENV=staging`, etc.
 
 ### Files that are gitignored
 

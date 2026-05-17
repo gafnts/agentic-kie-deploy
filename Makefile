@@ -119,7 +119,7 @@ registry-destroy: _check-registry-backend ## Destroy the registry stack for ENV 
 
 # EXTRACTOR IMAGE
 
-# Local equivalent of the build-and-push job in .github/workflows/deploy-dev.yml.
+# Local equivalent of the build-and-push job in .github/workflows/deploy-staging.yml.
 # Build output goes to stderr so the digest can be captured via `$(make ...)`.
 build-extractor: ## Build & push the extractor image to ECR for ENV; prints the resulting digest
 	@REPO_URL=$$(aws ecr describe-repositories --region us-east-1 \
