@@ -23,7 +23,7 @@ variable "allowed_upload_origins" {
 }
 
 variable "llm_model" {
-  description = "Gemini model identifier for the extractor Lambda."
+  description = "LLM identifier for the extractor Lambda."
   type        = string
   default     = "gemini-3.1-flash-lite-preview"
 }
