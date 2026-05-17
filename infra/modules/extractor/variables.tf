@@ -92,6 +92,6 @@ variable "log_retention_days" {
 }
 
 variable "environment" {
-  description = "Deployment environment (local, dev, prod). Used for the Environment tag the iam/ stack's DenyTouchingOtherEnvs guard reads."
+  description = "Deployment environment (local, staging, prod). Used for the Environment tag the iam/ stack's DenyTouchingOtherEnvs guard reads."
   type        = string
 }

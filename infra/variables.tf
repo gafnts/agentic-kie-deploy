@@ -13,7 +13,7 @@ variable "project_name" {
 variable "environment" {
   description = "Deployment environment"
   type        = string
-  default     = "dev"
+  default     = "staging"
 }
 
 variable "allowed_upload_origins" {
