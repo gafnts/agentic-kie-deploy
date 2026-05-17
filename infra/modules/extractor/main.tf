@@ -101,6 +101,7 @@ resource "aws_lambda_function" "extractor" {
 
   environment {
     variables = {
+      LLM_MODEL               = var.llm_model
       LLM_PROVIDER_SECRET_ARN = var.llm_provider_secret_arn
       LANGSMITH_SECRET_ARN    = var.langsmith_secret_arn
       LANGSMITH_PROJECT       = var.langsmith_project

@@ -58,7 +58,7 @@ from langsmith import traceable  # noqa: E402
 
 ls_client = LangSmithClient()
 
-_LLM = "gemini-3.1-flash-lite-preview"
+_LLM = os.environ["LLM_MODEL"]
 _model = ChatGoogleGenerativeAI(model=_LLM)
 _extractor = SinglePassExtractor(model=_model, schema=NDA)
 

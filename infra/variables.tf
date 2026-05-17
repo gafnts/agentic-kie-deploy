@@ -22,6 +22,12 @@ variable "allowed_upload_origins" {
   default     = ["https://gabriel.com.gt"]
 }
 
+variable "llm_model" {
+  description = "Gemini model identifier for the extractor Lambda."
+  type        = string
+  default     = "gemini-3.1-flash-lite-preview"
+}
+
 variable "extractor_image_digest" {
   description = "Immutable digest of the extractor container image to deploy. Injected by CI from the build-and-push job output."
   type        = string

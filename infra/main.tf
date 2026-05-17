@@ -62,6 +62,7 @@ module "extractor" {
   ingestion_bucket_arn    = module.bucket.bucket_arn
   results_table_arn       = module.table.table_arn
   results_table_name      = module.table.table_name
+  llm_model               = var.llm_model
   llm_provider_secret_arn = data.aws_secretsmanager_secret.llm_provider.arn
   langsmith_secret_arn    = data.aws_secretsmanager_secret.langsmith.arn
   langsmith_project       = "${var.project_name}-${var.environment}"

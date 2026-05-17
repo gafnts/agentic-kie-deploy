@@ -70,6 +70,12 @@ variable "results_table_name" {
   type        = string
 }
 
+variable "llm_model" {
+  description = "LLM identifier passed to the extractor Lambda."
+  type        = string
+  default     = "gemini-3.1-flash-lite-preview"
+}
+
 variable "llm_provider_secret_arn" {
   description = "ARN of the Secrets Manager secret holding the LLM provider API key."
   type        = string
