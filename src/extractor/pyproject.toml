@@ -8,7 +8,7 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-  "agentic-kie[google]>=0.5.1",
+  "agentic-kie[google]>=0.6",
   "aws-lambda-powertools>=3.29",
   "boto3>=1.43.7",
 ]

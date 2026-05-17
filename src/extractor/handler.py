@@ -15,9 +15,7 @@ import datetime
 import json
 import os
 import re
-import tempfile
 import time
-from pathlib import Path
 from typing import Any
 
 import boto3
@@ -60,6 +58,10 @@ from langsmith import traceable  # noqa: E402
 
 ls_client = LangSmithClient()
 
+_LLM = "gemini-3.1-flash-lite-preview"
+_model = ChatGoogleGenerativeAI(model=_LLM)
+_extractor = SinglePassExtractor(model=_model, schema=NDA)
+
 
 # uploads/{yyyy}/{mm}/{dd}/{document_id}
 DOC_ID_RE = re.compile(
@@ -91,22 +93,20 @@ def extract(bucket: str, key: str, document_id: str) -> dict[str, Any]:
     Return shape matches the optional attributes in the table schema (ADR-0007)
     so the conditional UPDATE in :func:`complete` works as-is.
     """
-    with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp:
-        s3_client.download_fileobj(bucket, key, tmp)
-        tmp.flush()
-        document = PDFLoader().load(Path(tmp.name))
+    data = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read()
+    document = PDFLoader().load_bytes(data, name=key)
 
-    llm = "gemini-3.1-flash-lite-preview"
-    model = ChatGoogleGenerativeAI(model=llm)
-    single = SinglePassExtractor(model=model, schema=NDA)
     time_zero = time.perf_counter()
-    result = single.extract(document)
+    result = _extractor.extract(document)
     processing_ms = round((time.perf_counter() - time_zero) * 1000)
 
     return {
-        "extracted_fields": result,
-        "model_version": llm,
-        "token_usage": {"input": 0, "output": 0},
+        "extracted_fields": result.value.model_dump(),
+        "model_version": _LLM,
+        "token_usage": {
+            "input": result.usage["input_tokens"],
+            "output": result.usage["output_tokens"],
+        },
         "processing_ms": processing_ms,
     }
 
