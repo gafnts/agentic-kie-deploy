@@ -57,7 +57,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentic-kie", extras = ["google"], specifier = ">=0.5.1" },
+    { name = "agentic-kie", extras = ["google"], specifier = ">=0.6" },
     { name = "aws-lambda-powertools", specifier = ">=3.29" },
     { name = "boto3", specifier = ">=1.43.7" },
 ]

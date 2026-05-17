@@ -271,7 +271,7 @@ git push -u origin feature/my-change
 
 CI runs the staging workflow. Within a minute the PR gets a sticky comment titled **"Terraform Plan · `staging`"** showing what would be applied. Review the plan as part of code review.
 
-Merge the PR. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first — it builds the container image, pushes it to the staging ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Service-only changes (Terraform tweaks, IAM tightening) skip the Docker work and re-apply with the previously-deployed digest. Either way, CI applies the changes to staging automatically, then runs `make smoke` as a post-apply ingress check (S3 → EventBridge → SQS); a smoke failure fails the workflow.
+Merge the PR. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first — it builds the container image, pushes it to the staging ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Service-only changes (Terraform tweaks, IAM tightening) skip the Docker work and re-apply with the previously-deployed digest. Either way, CI applies the changes to staging automatically, then runs `make smoke` as a post-apply check; a smoke failure fails the workflow. Smoke covers two paths: the queue path (S3 → EventBridge → SQS) and the full extraction path (S3 → Lambda → DynamoDB), verifying that an uploaded PDF reaches a `succeeded` status in the results table.
 
 ### Promoting to prod
 
@@ -322,7 +322,7 @@ You only need to touch `infra/iam/` when:
 | `make format` | Apply ruff lint fixes and formatting to `src` |
 | `make type` | Run mypy on `src` |
 | `make test` | Run pytest with coverage |
-| `make smoke` | End-to-end check against the deployed `ENV`: upload a sentinel object, assert it lands in the extraction queue (requires `terraform output` to resolve, i.e. backend already initialized for that env) |
+| `make smoke` | Run integration smoke tests against the deployed `ENV`: verifies the queue path (S3 → EventBridge → SQS) and the full extraction path (S3 → Lambda → DynamoDB). Requires Terraform outputs to be available (backend initialized for that env). |
 | `make tf-format` | Format all Terraform files |
 | `make bootstrap` | Create state bucket and write backend files (one-time, run once) |
 | `make backend` | Regenerate backend files only, no AWS calls (used by CI and after fresh clone) |

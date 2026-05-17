@@ -62,7 +62,7 @@ test: ## Run pytest with coverage
 	uv run pytest --cov --cov-report=term-missing
 
 smoke: ## Run end-to-end smoke tests against the deployed ENV (requires terraform outputs)
-	@bash tests/queue.sh
+	uv run pytest -m integration
 
 
 # BOOTSTRAP & PROVISIONING

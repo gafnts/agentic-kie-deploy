@@ -9,7 +9,7 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-  "agentic-kie[google]>=0.5.1",
+  "agentic-kie[google]>=0.6",
   "aws-lambda-powertools>=3.29",
   "boto3>=1.43.7",
 ]
@@ -40,14 +40,14 @@ mypy_path = "src"
 files = [ "src", "tests" ]
 strict = true
 overrides = [
-  { module = "tests.*", disallow_untyped_defs = false, disallow_any_expr = false },
+  { module = "tests.*", disallow_untyped_defs = false, disallow_any_expr = false, disable_error_code = [ "call-arg" ] },
   { module = "boto3", ignore_missing_imports = true },
   { module = "botocore.exceptions", ignore_missing_imports = true },
 ]
 
 [tool.pytest]
 ini_options.testpaths = [ "tests" ]
-ini_options.pythonpath = [ "src" ]
+ini_options.pythonpath = [ "src/extractor" ]
 ini_options.markers = [
   "integration: requires API keys and network access (deselected by default)",
 ]
@@ -56,3 +56,18 @@ ini_options.timeout = 120
 ini_options.filterwarnings = [
   "ignore::DeprecationWarning:importlib._bootstrap",
 ]
+
+[tool.coverage]
+run.branch = true
+run.omit = [
+  "src/agentic_kie/exceptions.py",
+  "tests/*",
+]
+run.source = [ "src" ]
+report.fail_under = 95
+report.show_missing = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true

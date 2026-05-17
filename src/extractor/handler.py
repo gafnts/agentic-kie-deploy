@@ -1,11 +1,11 @@
 """
 Extractor Lambda handler.
 
-Stub implementation of the contract defined in ADR-0009: parses ``document_id``
-from the S3 object key, runs the two-phase conditional-write idempotency state
-machine against DynamoDB, and flushes LangSmith on the way out. The actual
-``agentic-kie`` invocation is replaced with a placeholder result so the pipeline
-is deployable end-to-end before the library is wired in.
+Implements the contract defined in ADR-0009: parses ``document_id`` from the S3
+object key, runs the two-phase conditional-write idempotency state machine
+against DynamoDB, invokes ``agentic-kie`` to extract structured NDA fields, and
+flushes LangSmith on the way out. Module-level work is deferred via cached
+getters so the module is importable without AWS credentials or env config.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import json
 import os
 import re
 import time
+from functools import cache
 from typing import Any
 
 import boto3
@@ -24,49 +25,60 @@ from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from botocore.exceptions import ClientError
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langsmith import Client as LangSmithClient
+from langsmith import traceable
 from schema import NDA
 
 logger = Logger()
-
-
-LLM_PROVIDER_SECRET_ARN = os.environ["LLM_PROVIDER_SECRET_ARN"]
-LANGSMITH_SECRET_ARN = os.environ["LANGSMITH_SECRET_ARN"]
-LANGSMITH_PROJECT = os.environ["LANGSMITH_PROJECT"]
-RESULTS_TABLE_NAME = os.environ["RESULTS_TABLE_NAME"]
-
-s3_client = boto3.client("s3")
-secrets_client = boto3.client("secretsmanager")
-dynamodb = boto3.resource("dynamodb")
-table = dynamodb.Table(RESULTS_TABLE_NAME)
-
-
-def fetch_secret(arn: str) -> Any:
-    """Retrieve a secret string from AWS Secrets Manager by ARN."""
-    return secrets_client.get_secret_value(SecretId=arn)["SecretString"]
-
-
-# Fetched once per execution environment; reused across warm invocations
-os.environ["GOOGLE_API_KEY"] = fetch_secret(LLM_PROVIDER_SECRET_ARN)
-
-# LangSmith SDK reads these from the environment; populating them after
-# the GetSecretValue call keeps the key off the Lambda configuration
-os.environ["LANGSMITH_API_KEY"] = fetch_secret(LANGSMITH_SECRET_ARN)
-os.environ["LANGSMITH_TRACING"] = "true"
-
-from langsmith import Client as LangSmithClient  # noqa: E402
-from langsmith import traceable  # noqa: E402
-
-ls_client = LangSmithClient()
-
-_LLM = os.environ["LLM_MODEL"]
-_model = ChatGoogleGenerativeAI(model=_LLM)
-_extractor = SinglePassExtractor(model=_model, schema=NDA)
 
 
 # uploads/{yyyy}/{mm}/{dd}/{document_id}
 DOC_ID_RE = re.compile(
     r"^uploads/\d{4}/\d{2}/\d{2}/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
 )
+
+
+@cache
+def _secrets_client() -> Any:
+    return boto3.client("secretsmanager")
+
+
+@cache
+def _s3_client() -> Any:
+    return boto3.client("s3")
+
+
+@cache
+def _table() -> Any:
+    return boto3.resource("dynamodb").Table(os.environ["RESULTS_TABLE_NAME"])
+
+
+def _fetch_secret(arn: str) -> Any:
+    """Retrieve a secret string from AWS Secrets Manager by ARN."""
+    return _secrets_client().get_secret_value(SecretId=arn)["SecretString"]
+
+
+@cache
+def _bootstrap_secrets() -> None:
+    """Hydrate provider SDK env vars from Secrets Manager. Runs once per execution environment."""
+    os.environ["GOOGLE_API_KEY"] = _fetch_secret(os.environ["LLM_PROVIDER_SECRET_ARN"])
+    os.environ["LANGSMITH_API_KEY"] = _fetch_secret(os.environ["LANGSMITH_SECRET_ARN"])
+    os.environ["LANGSMITH_TRACING"] = "true"
+
+
+@cache
+def _extractor() -> SinglePassExtractor[NDA]:
+    """Build the key information extractor."""
+    _bootstrap_secrets()
+    model = ChatGoogleGenerativeAI(model=os.environ["LLM_MODEL"])
+    return SinglePassExtractor(model=model, schema=NDA)
+
+
+@cache
+def _ls_client() -> LangSmithClient:
+    """Construct the LangSmith client after the API key env var is hydrated."""
+    _bootstrap_secrets()
+    return LangSmithClient()
 
 
 def parse_document_id(key: str) -> str | None:
@@ -85,7 +97,7 @@ def log(outcome: str, **fields: Any) -> None:
     logger.info({"handler_outcome": outcome, **fields})
 
 
-@traceable(name="extract_document", project_name=LANGSMITH_PROJECT)
+@traceable(name="extract_document")
 def extract(bucket: str, key: str, document_id: str) -> dict[str, Any]:
     """
     Download ``s3://bucket/key``, run single-pass NDA extraction, and return structured results.
@@ -93,16 +105,16 @@ def extract(bucket: str, key: str, document_id: str) -> dict[str, Any]:
     Return shape matches the optional attributes in the table schema (ADR-0007)
     so the conditional UPDATE in :func:`complete` works as-is.
     """
-    data = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read()
+    data = _s3_client().get_object(Bucket=bucket, Key=key)["Body"].read()
     document = PDFLoader().load_bytes(data, name=key)
 
     time_zero = time.perf_counter()
-    result = _extractor.extract(document)
+    result = _extractor().extract(document)
     processing_ms = round((time.perf_counter() - time_zero) * 1000)
 
     return {
         "extracted_fields": result.value.model_dump(),
-        "model_version": _LLM,
+        "model_version": os.environ["LLM_MODEL"],
         "token_usage": {
             "input": result.usage["input_tokens"],
             "output": result.usage["output_tokens"],
@@ -113,7 +125,7 @@ def extract(bucket: str, key: str, document_id: str) -> dict[str, Any]:
 
 def claim(document_id: str) -> None:
     """Conditionally insert a pending record for document_id; raises if it already exists."""
-    table.put_item(
+    _table().put_item(
         Item={
             "document_id": document_id,
             "status": "pending",
@@ -125,14 +137,14 @@ def claim(document_id: str) -> None:
 
 def read_status(document_id: str) -> str | None:
     """Return the current DynamoDB status for document_id, or None if not found."""
-    resp = table.get_item(Key={"document_id": document_id}, ConsistentRead=True)
+    resp = _table().get_item(Key={"document_id": document_id}, ConsistentRead=True)
     item = resp.get("Item")
     return item.get("status") if item else None
 
 
 def complete(document_id: str, result: dict[str, Any]) -> None:
     """Conditionally transition document_id from pending to succeeded and write extraction results."""
-    table.update_item(
+    _table().update_item(
         Key={"document_id": document_id},
         UpdateExpression=(
             "SET #s = :new, completed_at = :now, "
@@ -155,7 +167,7 @@ def complete(document_id: str, result: dict[str, Any]) -> None:
 
 def fail(document_id: str, error_code: str, error_message: str) -> None:
     """Conditionally transition document_id from pending to failed and record the error."""
-    table.update_item(
+    _table().update_item(
         Key={"document_id": document_id},
         UpdateExpression="SET #s = :new, completed_at = :now, #e = :err",
         ConditionExpression="#s = :pending",
@@ -226,8 +238,6 @@ def process_record(record: dict[str, Any]) -> str | None:
                 status=status,
             )
             return None  # already terminal: ack
-        # status == "pending": a sibling delivery is still in-flight.
-        # Let the visibility timeout act as the synchronization window.
         log(
             "failed",
             reason="claim_pending",
@@ -274,6 +284,6 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
         return {"batchItemFailures": failures}
     finally:
         try:
-            ls_client.flush()
+            _ls_client().flush()
         except Exception:
             logger.exception("langsmith flush failed")
