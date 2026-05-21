@@ -106,6 +106,7 @@ resource "aws_lambda_function" "extractor" {
       LANGSMITH_SECRET_ARN    = var.langsmith_secret_arn
       LANGSMITH_PROJECT       = var.langsmith_project
       RESULTS_TABLE_NAME      = var.results_table_name
+      SQS_MAX_RECEIVE_COUNT   = tostring(var.queue_max_receive_count)
     }
   }
 

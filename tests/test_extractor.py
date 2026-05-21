@@ -208,22 +208,77 @@ class TestProcessRecord:
         completed = fake.update_item.call_args.kwargs["ExpressionAttributeValues"]
         assert completed[":new"] == "succeeded"
 
-    def test_extract_failure_marks_failed_and_returns_message_id(self, monkeypatch):
+    def test_extract_failure_intermediate_attempt_returns_message_id_without_terminal_write(
+        self, monkeypatch
+    ):
         fake = MagicMock()
         monkeypatch.setattr(handler, "_table", lambda: fake)
         monkeypatch.setattr(
             handler,
             "extract",
-            MagicMock(side_effect=RuntimeError("model exploded")),
+            MagicMock(side_effect=RuntimeError("transient")),
         )
+        monkeypatch.setenv("SQS_MAX_RECEIVE_COUNT", "3")
 
-        record = _record(body=_s3_event_body(), message_id="msg-99")
+        record = _record(body=_s3_event_body(), message_id="msg-99", receive_count=1)
+        assert handler.process_record(record) == "msg-99"
+
+        fake.put_item.assert_called_once()  # claim
+        fake.update_item.assert_not_called()  # fail() not called; retry budget remains
+
+    def test_extract_failure_final_attempt_writes_failed_and_returns_message_id(
+        self, monkeypatch
+    ):
+        fake = MagicMock()
+        monkeypatch.setattr(handler, "_table", lambda: fake)
+        monkeypatch.setattr(
+            handler,
+            "extract",
+            MagicMock(side_effect=RuntimeError("persistent")),
+        )
+        monkeypatch.setenv("SQS_MAX_RECEIVE_COUNT", "3")
+
+        record = _record(body=_s3_event_body(), message_id="msg-99", receive_count=3)
         assert handler.process_record(record) == "msg-99"
 
         fake.put_item.assert_called_once()  # claim
         failed = fake.update_item.call_args.kwargs["ExpressionAttributeValues"]
         assert failed[":new"] == "failed"
         assert failed[":err"]["code"] == "RuntimeError"
+
+    def test_extract_failure_final_attempt_ccfe_from_fail_is_suppressed(
+        self, monkeypatch
+    ):
+        fake = MagicMock()
+        fake.update_item.side_effect = _ccfe("UpdateItem")
+        monkeypatch.setattr(handler, "_table", lambda: fake)
+        monkeypatch.setattr(
+            handler,
+            "extract",
+            MagicMock(side_effect=RuntimeError("boom")),
+        )
+        monkeypatch.setenv("SQS_MAX_RECEIVE_COUNT", "3")
+
+        record = _record(body=_s3_event_body(), message_id="msg-99", receive_count=3)
+        assert handler.process_record(record) == "msg-99"
+
+    def test_extract_failure_final_attempt_non_ccfe_from_fail_is_suppressed_with_warning(
+        self, monkeypatch
+    ):
+        fake = MagicMock()
+        fake.update_item.side_effect = ClientError(
+            {"Error": {"Code": "InternalServerError"}}, "UpdateItem"
+        )
+        monkeypatch.setattr(handler, "_table", lambda: fake)
+        monkeypatch.setattr(
+            handler,
+            "extract",
+            MagicMock(side_effect=RuntimeError("boom")),
+        )
+        monkeypatch.setenv("SQS_MAX_RECEIVE_COUNT", "3")
+
+        record = _record(body=_s3_event_body(), message_id="msg-99", receive_count=3)
+        assert handler.process_record(record) == "msg-99"
 
     @pytest.mark.parametrize("terminal_status", ["succeeded", "failed"])
     def test_redelivery_of_terminal_doc_acks(self, monkeypatch, terminal_status):

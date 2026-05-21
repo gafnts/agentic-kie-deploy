@@ -55,6 +55,12 @@ variable "queue_arn" {
   type        = string
 }
 
+variable "queue_max_receive_count" {
+  description = "maxReceiveCount of the SQS extraction queue. Passed to the Lambda as SQS_MAX_RECEIVE_COUNT so it can gate the terminal failed write to the final delivery attempt."
+  type        = number
+  default     = 3
+}
+
 variable "ingestion_bucket_arn" {
   description = "ARN of the S3 ingestion bucket the Lambda reads source objects from."
   type        = string

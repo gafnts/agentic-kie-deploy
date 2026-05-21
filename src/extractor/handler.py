@@ -287,16 +287,20 @@ def process_record(record: dict[str, Any]) -> str | None:
         return None
     except Exception as exc:
         logger.exception("extraction failed for %s", document_id)
-        try:
-            fail(document_id, type(exc).__name__, str(exc))
-        except ClientError as fail_exc:
-            if (
-                fail_exc.response.get("Error", {}).get("Code")
-                != "ConditionalCheckFailedException"
-            ):
-                logger.warning(
-                    "failed to write terminal status for %s: %s", document_id, fail_exc
-                )
+        max_receive_count = int(os.environ.get("SQS_MAX_RECEIVE_COUNT", "3"))
+        if attempt >= max_receive_count:
+            try:
+                fail(document_id, type(exc).__name__, str(exc))
+            except ClientError as fail_exc:
+                if (
+                    fail_exc.response.get("Error", {}).get("Code")
+                    != "ConditionalCheckFailedException"
+                ):
+                    logger.warning(
+                        "failed to write terminal status for %s: %s",
+                        document_id,
+                        fail_exc,
+                    )
         log(
             "failed",
             reason="extract_error",

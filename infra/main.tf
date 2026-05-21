@@ -68,6 +68,7 @@ module "extractor" {
   architecture            = "arm64"
   max_concurrency         = var.environment == "prod" ? 25 : 10
   queue_arn               = module.queue.queue_arn
+  queue_max_receive_count = module.queue.max_receive_count
   ingestion_bucket_arn    = module.bucket.bucket_arn
   results_table_arn       = module.table.table_arn
   results_table_name      = module.table.table_name
