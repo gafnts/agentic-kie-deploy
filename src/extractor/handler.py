@@ -17,7 +17,7 @@ import os
 import re
 import time
 from functools import cache
-from typing import Any
+from typing import Any, cast
 
 import boto3
 from agentic_kie import PDFLoader, SinglePassExtractor
@@ -54,15 +54,20 @@ def _table() -> Any:
     return boto3.resource("dynamodb").Table(os.environ["RESULTS_TABLE_NAME"])
 
 
-def _fetch_secret(arn: str) -> Any:
+def _fetch_secret(arn: str) -> str:
     """Retrieve a secret string from AWS Secrets Manager by ARN."""
-    return _secrets_client().get_secret_value(SecretId=arn)["SecretString"]
+    return cast(str, _secrets_client().get_secret_value(SecretId=arn)["SecretString"])
+
+
+@cache
+def _llm_api_key() -> str:
+    """Fetch the LLM provider API key once; kept out of os.environ to avoid printenv exposure."""
+    return _fetch_secret(os.environ["LLM_PROVIDER_SECRET_ARN"])
 
 
 @cache
 def _bootstrap_secrets() -> None:
-    """Hydrate provider SDK env vars from Secrets Manager. Runs once per execution environment."""
-    os.environ["GOOGLE_API_KEY"] = _fetch_secret(os.environ["LLM_PROVIDER_SECRET_ARN"])
+    """Hydrate LangSmith SDK env vars from Secrets Manager. Runs once per execution environment."""
     os.environ["LANGSMITH_API_KEY"] = _fetch_secret(os.environ["LANGSMITH_SECRET_ARN"])
     os.environ["LANGSMITH_TRACING"] = "true"
 
@@ -71,7 +76,9 @@ def _bootstrap_secrets() -> None:
 def _extractor() -> SinglePassExtractor[NDA]:
     """Build the key information extractor."""
     _bootstrap_secrets()
-    model = ChatGoogleGenerativeAI(model=os.environ["LLM_MODEL"])
+    model = ChatGoogleGenerativeAI(
+        model=os.environ["LLM_MODEL"], google_api_key=_llm_api_key()
+    )
     return SinglePassExtractor(model=model, schema=NDA)
 
 

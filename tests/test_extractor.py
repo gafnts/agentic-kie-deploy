@@ -389,19 +389,21 @@ class TestInfrastructureGetters:
         assert handler._fetch_secret("arn:aws:secret") == "supersecret"
         fake_client.get_secret_value.assert_called_once_with(SecretId="arn:aws:secret")
 
-    def test_bootstrap_secrets_hydrates_env_vars(self, monkeypatch):
+    def test_llm_api_key_fetches_from_secrets_manager(self, monkeypatch):
+        handler._llm_api_key.cache_clear()
         monkeypatch.setenv("LLM_PROVIDER_SECRET_ARN", "arn:llm")
+        monkeypatch.setattr(handler, "_fetch_secret", MagicMock(return_value="llm-key"))
+
+        assert handler._llm_api_key() == "llm-key"
+
+    def test_bootstrap_secrets_hydrates_env_vars(self, monkeypatch):
         monkeypatch.setenv("LANGSMITH_SECRET_ARN", "arn:ls")
-        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
         monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
-        monkeypatch.setattr(
-            handler, "_fetch_secret", MagicMock(side_effect=["llm-key", "ls-key"])
-        )
+        monkeypatch.setattr(handler, "_fetch_secret", MagicMock(side_effect=["ls-key"]))
 
         handler._bootstrap_secrets()
 
-        assert os.environ["GOOGLE_API_KEY"] == "llm-key"
         assert os.environ["LANGSMITH_API_KEY"] == "ls-key"
         assert os.environ["LANGSMITH_TRACING"] == "true"
 
@@ -409,6 +411,9 @@ class TestInfrastructureGetters:
         monkeypatch.setenv("LLM_MODEL", "gemini-fake")
         bootstrap = MagicMock()
         monkeypatch.setattr(handler, "_bootstrap_secrets", bootstrap)
+        monkeypatch.setattr(
+            handler, "_llm_api_key", MagicMock(return_value="fake-api-key")
+        )
 
         fake_model = MagicMock()
         fake_extractor_obj = MagicMock()
@@ -419,7 +424,9 @@ class TestInfrastructureGetters:
 
         assert handler._extractor() is fake_extractor_obj
         bootstrap.assert_called_once()
-        model_ctor.assert_called_once_with(model="gemini-fake")
+        model_ctor.assert_called_once_with(
+            model="gemini-fake", google_api_key="fake-api-key"
+        )
         ext_ctor.assert_called_once_with(model=fake_model, schema=NDA)
 
     def test_ls_client_bootstraps_then_returns_cached_singleton(self, monkeypatch):
