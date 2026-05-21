@@ -44,16 +44,10 @@ data "aws_iam_policy_document" "extractor" {
   }
 
   statement {
-    sid    = "IngestionReadObject"
-    effect = "Allow"
-    actions = [
-      "s3:GetObject",
-      "s3:ListBucket",
-    ]
-    resources = [
-      var.ingestion_bucket_arn,
-      "${var.ingestion_bucket_arn}/*",
-    ]
+    sid       = "IngestionReadObject"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${var.ingestion_bucket_arn}/*"]
   }
 
   statement {
