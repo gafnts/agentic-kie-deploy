@@ -161,7 +161,7 @@ The LLM provider key lives at `agentic-kie-deploy/${env}/llm-provider`, the Lang
 
 The Lambda fetches both secrets once at cold start (top-level module scope), caches them in memory, and reuses them across warm invocations. The 15-minute Lambda execution-environment lifetime bounds staleness; rotation strategy beyond that is deferred to a future ADR alongside CMK encryption (the cluster of "before real data arrives" decisions).
 
-Six environment variables wire the Lambda into its secrets, the results table, and the LangSmith project, each with a deliberate provenance:
+Seven environment variables wire the Lambda into its secrets, the results table, the LangSmith project, and the queue's retry budget, each with a deliberate provenance:
 
 | Env var                    | Value                                                                        | Set by                                                              |
 | -------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------- |
@@ -169,8 +169,11 @@ Six environment variables wire the Lambda into its secrets, the results table, a
 | `LLM_PROVIDER_SECRET_ARN`  | ARN of the LLM provider secret                                               | Terraform, from `data.aws_secretsmanager_secret.llm_provider.arn`   |
 | `LANGSMITH_PROJECT`        | `${var.project_name}-${var.environment}` (e.g. `agentic-kie-deploy-staging`) | Terraform, composed at the root from `project_name` + `environment` |
 | `LANGSMITH_SECRET_ARN`     | ARN of the LangSmith secret                                                  | Terraform, from `data.aws_secretsmanager_secret.langsmith.arn`      |
-| `LANGSMITH_API_KEY`        | The fetched LangSmith API key value                                          | Lambda at cold start, after `secretsmanager:GetSecretValue`         |
 | `RESULTS_TABLE_NAME`       | Name of the DynamoDB results table                                           | Terraform, from `var.results_table_name`                            |
+| `SQS_MAX_RECEIVE_COUNT`    | The queue's `maxReceiveCount` (e.g. `3`)                                      | Terraform, from `module.queue.max_receive_count`                    |
+| `LANGSMITH_API_KEY`        | The fetched LangSmith API key value                                          | Lambda at cold start, after `secretsmanager:GetSecretValue`         |
+
+The Lambda also sets `LANGSMITH_TRACING=true` at cold start to arm the SDK; it is not Terraform-provided, which is why it is absent from the rows above.
 
 Only ARNs and the (env-derived) project name are passed to Lambda configuration; no secret material lands in CloudTrail or in `terraform.tfstate`. The LLM provider key is passed to the library's client as a constructor argument rather than via env var, so it is not visible in `printenv`-style debugging output. `LANGSMITH_PROJECT` is intentionally composed at the root from `var.project_name` and `var.environment` rather than exposed as a tfvar — the value is fully determined by the environment, and a misalignment between the env's resource names and the LangSmith project name is the kind of bug that produces "where did my traces go" mystery sessions.
 
@@ -236,8 +239,11 @@ module "extractor" {
   architecture            = "arm64"
   max_concurrency         = var.environment == "prod" ? 25 : 10
   queue_arn               = module.queue.queue_arn
+  queue_max_receive_count = module.queue.max_receive_count
   ingestion_bucket_arn    = module.bucket.bucket_arn
   results_table_arn       = module.table.table_arn
+  results_table_name      = module.table.table_name
+  llm_model               = var.llm_model
   llm_provider_secret_arn = data.aws_secretsmanager_secret.llm_provider.arn
   langsmith_secret_arn    = data.aws_secretsmanager_secret.langsmith.arn
   langsmith_project       = "${var.project_name}-${var.environment}"
@@ -352,6 +358,10 @@ The `apply` job is additionally gated by a GitHub Environment named `prod`, whic
 **`ConsistentRead` in status re-read**
 
 `read_status` uses `ConsistentRead=True`. After a `ConditionalCheckFailedException` on the claim write, an eventually consistent read could return stale data and misroute the redelivery — returning "not found" for a row that exists, causing a pending document to be treated as in-flight when it may already be terminal. A strongly consistent read ensures the row that caused the condition failure is visible before a branching decision is made on its status.
+
+**`failed` terminal write is gated on the final delivery attempt**
+
+The `succeeded` and `failed` terminal writes are not symmetric in *when* they fire. `complete()` runs as soon as extraction returns; `fail()` runs only when `attempt >= SQS_MAX_RECEIVE_COUNT`. Earlier failures leave the row `pending` and return the message as a batch-item failure so SQS redelivers it. Writing `failed` on the first failure would make the row terminal, and the `#s = :pending` guard on the terminal write — together with the `claim()`/re-read noop path — would then make every redelivery ack as already-terminal, silently consuming the document's retry budget before it ever reaches the DLQ. Gating `failed` to the last attempt is what lets a transient failure exhaust its `maxReceiveCount` retries. `maxReceiveCount` reaches the handler as the `SQS_MAX_RECEIVE_COUNT` env var, so the extractor's failure logic and the queue's redrive policy cannot drift.
 
 ### Observability alarms
 
