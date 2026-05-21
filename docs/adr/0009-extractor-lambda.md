@@ -49,15 +49,17 @@ variable "extractor_image_digest" {
     error_message = "extractor_image_digest must be a sha256 digest, e.g. sha256:abc...123."
   }
 }
+```
 
-variable "llm_provider_secret_arn" {
-  description = "ARN of the Secrets Manager secret holding the LLM provider API key"
-  type        = string
+`infra/main.tf` resolves both secret ARNs at plan time via name-based data source lookups — no ARNs to copy or paste into tfvars:
+
+```hcl
+data "aws_secretsmanager_secret" "llm_provider" {
+  name = "${var.project_name}/${var.environment}/llm-provider"
 }
 
-variable "langsmith_secret_arn" {
-  description = "ARN of the Secrets Manager secret holding the LangSmith API key"
-  type        = string
+data "aws_secretsmanager_secret" "langsmith" {
+  name = "${var.project_name}/${var.environment}/langsmith"
 }
 ```
 
@@ -146,27 +148,29 @@ The role is created inside the module, named `agentic-kie-deploy-${env}-extracto
 | `SqsConsume`           | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes`    | `var.queue_arn`                                                       |
 | `IngestionReadObject`  | `s3:GetObject`                                                         | `${var.ingestion_bucket_arn}/*`                                       |
 | `ResultsWrite`         | `dynamodb:PutItem`, `dynamodb:UpdateItem`, `dynamodb:GetItem`          | `var.results_table_arn`                                               |
-| `SecretsRead`          | `secretsmanager:GetSecretValue`                                        | `var.llm_provider_secret_arn`, `var.langsmith_secret_arn`             |
+| `SecretsRead`          | `secretsmanager:GetSecretValue`                                        | `data.aws_secretsmanager_secret.llm_provider.arn`, `data.aws_secretsmanager_secret.langsmith.arn` |
 | `LogsWrite`            | `logs:CreateLogStream`, `logs:PutLogEvents`                            | `${aws_cloudwatch_log_group.extractor.arn}:*`                         |
 
 ECR pull is *not* in the execution role — ADR-0008's repository policy already grants `lambda.amazonaws.com` pull rights scoped by `aws:SourceArn` to this function's ARN. CloudWatch Logs `CreateLogGroup` is not granted either; the module owns the log group as a resource so the function never needs to create it. The two secrets share one `SecretsRead` statement rather than splitting into two near-identical statements; the resource list is the audit boundary either way.
 
 ### Secrets
 
-The Lambda depends on two long-lived secrets: the LLM provider API key (used on the hot path, every invocation) and the LangSmith API key (used to ship traces, also every invocation). Both follow the same shape — Secrets Manager, one secret per environment, created out-of-band, ARN passed in via tfvar — so they share an operational story.
+The Lambda depends on two long-lived secrets: the LLM provider API key (used on the hot path, every invocation) and the LangSmith API key (used to ship traces, also every invocation). Both follow the same shape — Secrets Manager, one secret per environment, created out-of-band, ARN resolved at plan time by a name-based Terraform data source lookup — so they share an operational story.
 
-The LLM provider key lives at `agentic-kie-deploy/${env}/llm-provider`, the LangSmith key at `agentic-kie-deploy/${env}/langsmith`. Both are created with `aws secretsmanager create-secret` per environment, documented as a one-time step in `CONTRIBUTING.md`, and their ARNs are passed through `var.llm_provider_secret_arn` and `var.langsmith_secret_arn` respectively. Terraform manages the IAM grants but not the secret values: committing a secret reference that disappears with `terraform destroy` is a footgun, and rotation will not flow through `terraform apply` anyway. Out-of-band provisioning makes the lifecycles independent on purpose.
+The LLM provider key lives at `agentic-kie-deploy/${env}/llm-provider`, the LangSmith key at `agentic-kie-deploy/${env}/langsmith`. Both are created with `aws secretsmanager create-secret` per environment, documented as a one-time step in `CONTRIBUTING.md`, Terraform resolves their ARNs at plan time via `data "aws_secretsmanager_secret"` lookups keyed on the secret name in `infra/main.tf` — no ARNs to copy or paste into tfvars. Terraform manages the IAM grants but not the secret values: committing a secret reference that disappears with `terraform destroy` is a footgun, and rotation will not flow through `terraform apply` anyway. Out-of-band provisioning makes the lifecycles independent on purpose.
 
 The Lambda fetches both secrets once at cold start (top-level module scope), caches them in memory, and reuses them across warm invocations. The 15-minute Lambda execution-environment lifetime bounds staleness; rotation strategy beyond that is deferred to a future ADR alongside CMK encryption (the cluster of "before real data arrives" decisions).
 
-Four environment variables wire the Lambda into both secrets and the LangSmith project, each with a deliberate provenance:
+Six environment variables wire the Lambda into its secrets, the results table, and the LangSmith project, each with a deliberate provenance:
 
-| Env var                    | Value                                                                    | Set by                                                              |
-| -------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------- |
-| `LLM_PROVIDER_SECRET_ARN`  | ARN of the LLM provider secret                                           | Terraform, from `var.llm_provider_secret_arn`                       |
-| `LANGSMITH_SECRET_ARN`     | ARN of the LangSmith secret                                              | Terraform, from `var.langsmith_secret_arn`                          |
+| Env var                    | Value                                                                        | Set by                                                              |
+| -------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `LLM_MODEL`                | LLM model identifier (e.g. `gemini-3.1-flash-lite-preview`)                  | Terraform, from `var.llm_model`                                     |
+| `LLM_PROVIDER_SECRET_ARN`  | ARN of the LLM provider secret                                               | Terraform, from `data.aws_secretsmanager_secret.llm_provider.arn`   |
 | `LANGSMITH_PROJECT`        | `${var.project_name}-${var.environment}` (e.g. `agentic-kie-deploy-staging`) | Terraform, composed at the root from `project_name` + `environment` |
-| `LANGSMITH_API_KEY`        | The fetched LangSmith API key value                                      | Lambda at cold start, after `secretsmanager:GetSecretValue`         |
+| `LANGSMITH_SECRET_ARN`     | ARN of the LangSmith secret                                                  | Terraform, from `data.aws_secretsmanager_secret.langsmith.arn`      |
+| `LANGSMITH_API_KEY`        | The fetched LangSmith API key value                                          | Lambda at cold start, after `secretsmanager:GetSecretValue`         |
+| `RESULTS_TABLE_NAME`       | Name of the DynamoDB results table                                           | Terraform, from `var.results_table_name`                            |
 
 Only ARNs and the (env-derived) project name are passed to Lambda configuration; no secret material lands in CloudTrail or in `terraform.tfstate`. The LLM provider key is passed to the library's client as a constructor argument rather than via env var, so it is not visible in `printenv`-style debugging output. `LANGSMITH_PROJECT` is intentionally composed at the root from `var.project_name` and `var.environment` rather than exposed as a tfvar — the value is fully determined by the environment, and a misalignment between the env's resource names and the LangSmith project name is the kind of bug that produces "where did my traces go" mystery sessions.
 
@@ -190,9 +194,9 @@ Function-level alarms (`Errors`, `Throttles`, `IteratorAge` on the event source 
 
 ADR-0007 placed the agent trace in the extractor module's territory explicitly, with the upgrade path described as "CloudWatch Logs Insights now; Langfuse or Phoenix later." That framing assumed a hand-rolled JSON schema in CloudWatch as the MVP backend, with a self-hosted trace store as the next step. At portfolio scale, both ends of that progression are heavier than the project needs. Designing a CloudWatch JSON schema means owning the schema, the Logs Insights queries that interrogate it, and the migration plan when it stops scaling — substantial work to recreate, badly, what dedicated LLM-observability tools provide out of the box. Self-hosting Langfuse or Phoenix is the production-grade answer but is a stack of its own (Fargate, RDS, S3, IAM, an ADR) for an extraction pipeline that, at this scale, runs a handful of documents per day.
 
-The path of least resistance for a portfolio project is **LangSmith**, used standalone — no LangChain dependency. The `langsmith` Python SDK exposes a `@traceable` decorator that wraps any function and ships its inputs, outputs, latency, and metadata to LangSmith's hosted backend. The library's `Extractor` strategies wrap one (single-pass) or several (agentic) LLM calls; instrumenting the call sites with `@traceable` produces a trace per document, with one root span per extraction and child spans for each tool invocation in agentic mode. Token usage, model + version, prompt, completion, and latency are captured automatically when the SDK detects the provider's SDK in the call stack; for providers it doesn't recognize natively, the same metadata can be passed explicitly via the decorator's `metadata` parameter. There is no schema for us to design and no Logs Insights query for us to write — the UI gives all of that for free.
+The path of least resistance for a portfolio project is **LangSmith**. The `langsmith` Python SDK is independent of the LangChain framework — tracing is wired via `@traceable` on the deploy-side `extract()` wrapper in `handler.py`, not through any LangChain integration. The deployed image does carry `langchain_google_genai` as a transitive dependency of `agentic-kie[google]`, but the tracing path itself has no LangChain coupling. The `@traceable` decorator wraps any function and ships its inputs, outputs, latency, and metadata to LangSmith's hosted backend. At MVP the implementation uses `SinglePassExtractor` only, so each trace is a single root span per document; agentic child/tool spans are a capability the library supports and `@traceable` would surface automatically if the extractor strategy were switched to an agentic one. Token usage, model + version, prompt, completion, and latency are captured automatically when the SDK detects the provider's SDK in the call stack; for providers it doesn't recognize natively, the same metadata can be passed explicitly via the decorator's `metadata` parameter. There is no schema for us to design and no Logs Insights query for us to write — the UI gives all of that for free.
 
-LangSmith is provisioned out-of-band, the same shape as the LLM provider secret: one project per environment (`agentic-kie-deploy-staging`, `agentic-kie-deploy-prod`), one API key per project, stored in Secrets Manager at `agentic-kie-deploy/${env}/langsmith`, ARN passed in via the `langsmith_secret_arn` tfvar declared above. The execution role's `SecretsRead` statement covers both keys via a single resource list. The Lambda picks the project up from the `LANGSMITH_PROJECT` env var (derived inside the module from `${var.project_name}-${var.environment}`) and the API key from `LANGSMITH_API_KEY`, which is populated at cold start after `secretsmanager:GetSecretValue` on `LANGSMITH_SECRET_ARN`. The LLM provider key is passed to the library's client as a constructor argument.
+LangSmith is provisioned out-of-band, the same shape as the LLM provider secret: one project per environment (`agentic-kie-deploy-staging`, `agentic-kie-deploy-prod`), one API key per project, stored in Secrets Manager at `agentic-kie-deploy/${env}/langsmith`, ARN resolved at plan time via the `data "aws_secretsmanager_secret".langsmith` lookup in `infra/main.tf`. The execution role's `SecretsRead` statement covers both keys via a single resource list. The Lambda picks the project up from the `LANGSMITH_PROJECT` env var (derived inside the module from `${var.project_name}-${var.environment}`) and the API key from `LANGSMITH_API_KEY`, which is populated at cold start after `secretsmanager:GetSecretValue` on `LANGSMITH_SECRET_ARN`. The LLM provider key is passed to the library's client as a constructor argument.
 
 One Lambda-specific implementation detail is worth recording explicitly because it is the kind of thing that disappears into "the traces are flaky" if it is not surfaced now. The `langsmith` SDK batches trace uploads asynchronously to avoid blocking the request path. On a long-running web server this is invisibly correct; on Lambda, the execution environment is frozen the moment the handler returns, and any batch that has not been flushed by then is lost. The handler must therefore call `langsmith.client.flush()` (or use the SDK's context manager) in a `finally` block, after the DynamoDB terminal write and before returning. The alternative — running the SDK in synchronous mode — adds 50–200 ms to every invocation for the round-trip to LangSmith's API, which is real cost at scale; explicit flushing pays the same network cost but only once at the end, in parallel with the handler's wind-down. The flush call is cheap; forgetting it is silent.
 
@@ -214,6 +218,14 @@ data "aws_ecr_repository" "extractor" {
   name = "${var.project_name}-${var.environment}-extractor"
 }
 
+data "aws_secretsmanager_secret" "llm_provider" {
+  name = "${var.project_name}/${var.environment}/llm-provider"
+}
+
+data "aws_secretsmanager_secret" "langsmith" {
+  name = "${var.project_name}/${var.environment}/langsmith"
+}
+
 module "extractor" {
   source                  = "./modules/extractor"
   function_name           = "${var.project_name}-${var.environment}-extractor"
@@ -226,24 +238,30 @@ module "extractor" {
   queue_arn               = module.queue.queue_arn
   ingestion_bucket_arn    = module.bucket.bucket_arn
   results_table_arn       = module.table.table_arn
-  llm_provider_secret_arn = var.llm_provider_secret_arn
-  langsmith_secret_arn    = var.langsmith_secret_arn
+  llm_provider_secret_arn = data.aws_secretsmanager_secret.llm_provider.arn
+  langsmith_secret_arn    = data.aws_secretsmanager_secret.langsmith.arn
   langsmith_project       = "${var.project_name}-${var.environment}"
   log_retention_days      = var.environment == "prod" ? 30 : 14
   environment             = var.environment
 }
 ```
 
-And the queue wiring is updated to pass through the function's timeout, removing the placeholder default flagged in `infra/modules/queue/variables.tf:14-17`:
+Because `module.extractor` takes `queue_arn = module.queue.queue_arn`, passing `module.extractor.timeout_seconds` back into `module.queue` would create a cycle. A root-level local breaks the cycle while keeping the value in one place:
 
 ```hcl
+locals {
+  extractor_timeout_seconds = 120
+}
+
 module "queue" {
   source                 = "./modules/queue"
   name                   = "${var.project_name}-${var.environment}-extraction"
   source_bucket_name     = module.bucket.bucket_name
-  lambda_timeout_seconds = module.extractor.timeout_seconds
+  lambda_timeout_seconds = local.extractor_timeout_seconds
 }
 ```
+
+The same local is forwarded to `module.extractor` as `timeout_seconds`, so both modules always receive the same value. The placeholder default in `infra/modules/queue/variables.tf:14-17` is removed.
 
 ### Module responsibilities
 
@@ -252,7 +270,7 @@ module "queue" {
 | `infra/registry/`    | Repository, lifecycle policy, repository policy (ADR-0008). Output: `repository_url`.                                       |
 | CI `build-and-push`  | Build image (arm64) on a native arm64 runner, push to env repo, publish digest as job output. Applied to **both** `deploy-staging.yml` and `deploy-prod.yml`: switches `runs-on` to `ubuntu-24.04-arm` and uses `docker buildx build --platform=linux/arm64 --push`. |
 | `infra/modules/extractor/` | Lambda function, execution role + inline policies, event source mapping, log group. Inputs: image URI, queue/bucket/table ARNs, both secret ARNs. |
-| `infra/modules/queue/` | Receives `lambda_timeout_seconds` from the extractor module; placeholder default removed.                                  |
+| `infra/modules/queue/` | Receives `lambda_timeout_seconds` from `local.extractor_timeout_seconds` in the root module; placeholder default removed.  |
 | `iam/`               | Unchanged; `PowerUserAccess` already covers Lambda + IAM create needed by the deploy roles.                                 |
 
 ## Consequences
@@ -261,7 +279,7 @@ Positive:
 
 - The cost ceiling on an ingestion burst is explicit (`maximum_concurrency`) and lives next to the function it bounds, closing the deferral ADR-0005 made.
 - Idempotency is end-to-end: stable PK (ADR-0006/0007) + conditional first write + status-guarded terminal update means at-least-once SQS delivery cannot clobber a terminal row, and a redelivered already-terminal message is a no-op.
-- The visibility timeout can no longer drift from the function timeout; the queue module's placeholder default disappears and the relationship is enforced by Terraform wiring.
+- The visibility timeout can no longer drift from the function timeout; the queue module's placeholder default disappears and both values are pinned to the same root-level local (`local.extractor_timeout_seconds = 120`).
 - Parse failures are a no-retry path by construction: malformed inputs do not waste three `maxReceiveCount` attempts before reaching the DLQ.
 - IAM grants are the minimum needed for the data plane, scoped to specific ARNs, and the `Environment`-tag deny guard from `iam/` still holds.
 - arm64 is a ~20% cost reduction with no behavioral change for an I/O-bound workload; the cost is one `runs-on` swap and one `buildx` invocation in CI, on free native runners.
@@ -272,7 +290,7 @@ Negative:
 
 - Container-image cold starts (3–10 s) are accepted as-is. The async polling model hides them from the user, but a synchronous read endpoint would have to revisit this.
 - `maximum_concurrency = 10` is a guess; the right value depends on real ingestion patterns. It is a single tfvar to bump.
-- The two secrets are created out-of-band; this is two more first-time-setup steps per env, documented but easy to forget. Mitigated by failing loudly: the Lambda's first invocation throws a clear "secret not found" on cold start.
+- The two secrets are created out-of-band; this is two more first-time-setup steps per env, documented but easy to forget. Mitigated by failing loudly: `terraform plan` errors immediately if a secret does not exist by the expected name — the data source lookup surfaces the gap at plan time, not at Lambda cold start.
 - `batch_size = 1` gives up the small wins of batching (a single Lambda processing two trivial documents in one invocation). The simpler failure model is worth the cost.
 - Function-level partial-batch responses (`ReportBatchItemFailures`) are over-engineered for `batch_size = 1`, but locking the shape in now avoids a behavioral change if the batch size ever moves.
 - Prompts and completions live at a third-party SaaS (LangSmith) for the duration of its retention. Acceptable for portfolio scale; the migration target and timing are recorded in the Observability NOTE.
@@ -305,6 +323,35 @@ Neutral:
 - **Synchronous LangSmith mode** (rather than batched-with-explicit-flush). Rejected — adds 50–200 ms of network round-trip to every invocation, when an explicit flush in a `finally` block pays the same cost once at the end of the handler.
 
 ## Post-implementation
+
+### CI / build pipeline
+
+**Build pattern: load → scan → push**
+
+The Decision NOTE prescribed `docker buildx build --platform=linux/arm64 --push`, reasoning that a platform-targeted buildx build cannot stay in the local Docker image store. That holds for cross-platform builds (an x86_64 host emulating arm64 via QEMU). On a native arm64 runner — which is what both workflows use — `--load` works: the runner's daemon *is* arm64, so no cross-compilation occurs and the image can be loaded locally. The workflows exploit this: `docker buildx build --platform=linux/arm64 --load` loads the image into the local daemon, Trivy scans it for HIGH and CRITICAL vulnerabilities, and only if the scan passes does `docker push` push it to ECR. The NOTE's stated build line is therefore incorrect for the native-runner case; the scan-before-push gate is the reason for the deviation and requires the image to be in the local daemon before it reaches ECR.
+
+**Service-only path**
+
+Both workflows detect whether `src/extractor/**` changed (`dorny/paths-filter`). On an infra-only push, the `build-and-push` job skips the build entirely and reads the currently-deployed image digest from the live Lambda (`aws lambda get-function ... Code.ImageUri`), forwarding it as the job output into the downstream plan/apply step. This avoids picking up out-of-band ECR pushes or in-flight images when only infrastructure changes. A first-time deploy that does not touch extractor source will fail with a clear error: the Lambda does not exist yet and cannot be queried for its digest.
+
+**PR-plan placeholder**
+
+The PR plan jobs run on pull request events, before any merge or build. When no image exists in ECR yet, a syntactically valid placeholder (`sha256:000...000`) is substituted so the plan can execute and post a PR comment. The plan output the reviewer sees contains this placeholder digest; the real digest is baked into the post-merge plan artifact.
+
+**Prod role split and GitHub Environment gate**
+
+Two AWS roles are in play for the prod workflow:
+
+- `AWS_ROLE_ARN_PROD_PLAN` — used by `build-and-push` and `plan`. Scoped to ECR push and read-only access to the prod Terraform state; cannot apply.
+- `AWS_ROLE_ARN_PROD` — used by `apply` only. Full permission set for prod infrastructure mutations.
+
+The `apply` job is additionally gated by a GitHub Environment named `prod`, which requires manual approval before Terraform runs against production. ECR push runs under the plan role intentionally: the digest must be available to bake into the saved plan artifact before the approval gate is reached, so reviewers approve a plan that already contains the exact image that will be deployed.
+
+### Implementation notes
+
+**`ConsistentRead` in status re-read**
+
+`read_status` uses `ConsistentRead=True`. After a `ConditionalCheckFailedException` on the claim write, an eventually consistent read could return stale data and misroute the redelivery — returning "not found" for a row that exists, causing a pending document to be treated as in-flight when it may already be terminal. A strongly consistent read ensures the row that caused the condition failure is visible before a branching decision is made on its status.
 
 ### Observability alarms
 
