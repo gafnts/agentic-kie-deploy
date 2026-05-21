@@ -81,7 +81,7 @@ Idempotency is a shared responsibility split across the schema and the extractor
 
 ### Encryption
 
-Enable server-side encryption with the AWS-managed KMS key (`aws/dynamodb`) in both `dev` and `prod`:
+Enable server-side encryption with the AWS-managed KMS key (`aws/dynamodb`) in both `staging` and `prod`:
 
 ```hcl
 resource "aws_dynamodb_table" "results" {
@@ -112,7 +112,7 @@ resource "aws_dynamodb_table" "results" {
 }
 ```
 
-PITR is enabled in both environments. The aim is to keep the table's configuration near-identical across `dev` and `prod` — divergence between environments is itself a source of surprise — and PITR's cost is negligible against a portfolio-scale workload. Deletion protection stays prod-only because it would block `terraform destroy`, which is part of the dev iteration loop (`make destroy`).
+PITR is enabled in both environments. The aim is to keep the table's configuration near-identical across `staging` and `prod` — divergence between environments is itself a source of surprise — and PITR's cost is negligible against a portfolio-scale workload. Deletion protection stays prod-only because it would block `terraform destroy`, which is part of the dev iteration loop (`make destroy`).
 
 If this project moves beyond the portfolio stage and begins ingesting real PII, switch to a CMK before real data arrives. The shape of that change:
 
