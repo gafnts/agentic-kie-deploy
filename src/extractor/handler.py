@@ -10,7 +10,6 @@ getters so the module is importable without AWS credentials or env config.
 
 from __future__ import annotations
 
-import contextlib
 import datetime
 import json
 import os
@@ -288,8 +287,16 @@ def process_record(record: dict[str, Any]) -> str | None:
         return None
     except Exception as exc:
         logger.exception("extraction failed for %s", document_id)
-        with contextlib.suppress(ClientError):
+        try:
             fail(document_id, type(exc).__name__, str(exc))
+        except ClientError as fail_exc:
+            if (
+                fail_exc.response.get("Error", {}).get("Code")
+                != "ConditionalCheckFailedException"
+            ):
+                logger.warning(
+                    "failed to write terminal status for %s: %s", document_id, fail_exc
+                )
         log(
             "failed",
             reason="extract_error",
