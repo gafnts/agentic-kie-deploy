@@ -115,9 +115,9 @@ def extract(bucket: str, key: str, document_id: str) -> dict[str, Any]:
     data = _s3_client().get_object(Bucket=bucket, Key=key)["Body"].read()
     document = PDFLoader().load_bytes(data, name=key)
 
-    time_zero = time.perf_counter()
+    start = time.perf_counter()
     result = _extractor().extract(document)
-    processing_ms = round((time.perf_counter() - time_zero) * 1000)
+    processing_ms = round((time.perf_counter() - start) * 1000)
 
     return {
         "extracted_fields": result.value.model_dump(),
@@ -327,4 +327,4 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
         try:
             _ls_client().flush()
         except Exception:
-            logger.exception("langsmith flush failed")
+            logger.exception("LangSmith flush failed")
