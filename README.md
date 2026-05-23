@@ -10,7 +10,7 @@
 
 ---
 
-<p align="center">A client uploads a document to S3 and receives structured fields asynchronously — no blocking on LLM calls, no extraction infrastructure to manage. The pipeline is fully serverless, event-driven, and Terraform-provisioned on AWS.</p>
+<p align="center">A client uploads a document to S3 and receives structured fields asynchronously. The pipeline is fully serverless, event-driven, and Terraform-provisioned on AWS.</p>
 
 ## Contents
 
@@ -29,7 +29,7 @@
 
 ## Architecture
 
-The pipeline is fully asynchronous. A client calls a small presigner Lambda behind an API Gateway HTTP endpoint, which returns a short-lived pre-signed S3 PUT URL. The client uploads the document directly to S3, bypassing API Gateway payload limits entirely. The bucket emits an `Object Created` event to EventBridge, which routes it to an SQS queue with a dead-letter queue and redrive policy for resilience. SQS then triggers the extractor Lambda, packaged as a container image from ECR to accommodate heavier LLM dependencies. The extractor runs the [`agentic-kie`](https://github.com/gafnts/agentic-kie) library against the document and writes the resulting structured record to a DynamoDB table keyed by document ID.
+The pipeline is fully asynchronous. A client calls a small presigner Lambda behind an API Gateway HTTP endpoint, which returns a short-lived pre-signed S3 PUT URL. The client uploads the document directly to S3, bypassing API Gateway payload limits entirely. The bucket emits an `Object Created` event to EventBridge, which routes it to an SQS queue with a dead-letter queue and redrive policy for resilience. SQS then triggers the extractor Lambda, packaged as a container image from ECR to accommodate heavy LLM dependencies. The extractor runs the [`agentic-kie`](https://github.com/gafnts/agentic-kie) library against the document and writes the resulting structured record to a DynamoDB table keyed by document ID.
 
 ![architecture](./docs/architecture.png)
 
