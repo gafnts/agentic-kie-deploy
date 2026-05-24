@@ -1,0 +1,14 @@
+[project]
+name = "extractor"
+version = "0.1.0"
+requires-python = ">=3.13"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+  "agentic-kie[google]>=0.6",
+  "aws-lambda-powertools>=3.29",
+  "boto3>=1.43.7",
+]

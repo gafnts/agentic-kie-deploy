@@ -1,22 +1,22 @@
-name: Deploy · Prod
+name: Deploy · Staging
 
 on:
   push:
-    branches: [main]
+    branches: [develop]
     paths:
       - "infra/**"
       - "!infra/iam/**"
       - "!infra/registry/**"
       - "src/extractor/**"
-      - ".github/workflows/deploy-prod.yml"
+      - ".github/workflows/deploy-staging.yml"
   pull_request:
-    branches: [main]
+    branches: [develop]
     paths:
       - "infra/**"
       - "!infra/iam/**"
       - "!infra/registry/**"
       - "src/extractor/**"
-      - ".github/workflows/deploy-prod.yml"
+      - ".github/workflows/deploy-staging.yml"
 
 permissions:
   id-token: write
@@ -24,19 +24,18 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: deploy-prod
+  group: deploy-staging
   cancel-in-progress: false
 
 env:
-  ENV: prod
+  ENV: staging
   AWS_REGION: us-east-1
   TF_VERSION: 1.15.0
+  PYTHON_VERSION: "3.13"
 
 jobs:
-  # PR plan: posts a sticky comment so reviewers can see what would land.
-  # Not the plan that gets applied — that one is generated post-merge.
-  plan-pr:
-    name: Plan (PR)
+  plan:
+    name: Plan
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
@@ -49,7 +48,7 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN_PROD_PLAN }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_STAGING }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Generate backend file
@@ -96,9 +95,9 @@ jobs:
         if: always()
         uses: marocchino/sticky-pull-request-comment@v3
         with:
-          header: terraform-plan-prod
+          header: terraform-plan-staging
           message: |
-            #### Terraform Plan · `prod` ${{ steps.plan.outcome == 'success' && '✅' || '❌' }}
+            #### Terraform Plan · `staging` ${{ steps.plan.outcome == 'success' && '✅' || '❌' }}
             <details><summary>Show plan</summary>
 
             ~~~
@@ -109,9 +108,6 @@ jobs:
       - if: steps.plan.outcome == 'failure'
         run: exit 1
 
-  # Post-merge image push: runs before plan so the digest is available to bake
-  # into the saved plan artifact. Uses the prod-plan role (which has targeted
-  # ECR push permission) so no environment approval gate is required here.
   # Native arm64 runner (free on public repos). Matches the Lambda runtime
   # architecture, so no QEMU step is needed (ADR-0009).
   build-and-push:
@@ -134,7 +130,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN_PROD_PLAN }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_STAGING }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to ECR
@@ -227,11 +223,8 @@ jobs:
           esac
           echo "value=$DIGEST" >> "$GITHUB_OUTPUT"
 
-  # Post-merge plan: generates the saved plan that will be applied. The
-  # digest from build-and-push is baked into the plan via TF_VAR_*, so the
-  # apply job consumes the same bytes that were reviewed (ADR-0009).
-  plan:
-    name: Plan
+  apply:
+    name: Apply
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     needs: build-and-push
@@ -245,7 +238,7 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN_PROD_PLAN }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_STAGING }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Generate backend file
@@ -253,50 +246,19 @@ jobs:
 
       - run: make init ENV=${{ env.ENV }}
 
-      - env:
-          TF_VAR_extractor_image_digest: ${{ needs.build-and-push.outputs.image_digest }}
-        run: make ci-plan ENV=${{ env.ENV }} 2>&1 | tee plan.txt
+      - name: Apply
+        run: |
+          terraform -chdir=infra apply -auto-approve \
+            -var-file=envs/${{ env.ENV }}.tfvars \
+            -var=extractor_image_digest=${{ needs.build-and-push.outputs.image_digest }}
 
-      - name: Upload saved plan
-        uses: actions/upload-artifact@v4
+      - uses: astral-sh/setup-uv@v6
         with:
-          name: tfplan-prod
-          path: |
-            infra/tfplan.prod
-            plan.txt
-          retention-days: 7
-          if-no-files-found: error
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
 
-  # Post-merge apply: gated by the `prod` GitHub Environment (manual approval).
-  apply:
-    name: Apply
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    needs: plan
-    environment: prod
-    env:
-      I_KNOW: "1"
-    steps:
-      - uses: actions/checkout@v6
+      - name: Sync dependencies
+        run: uv sync --all-groups
 
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-
-      - uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN_PROD }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Generate backend file
-        run: make backend
-
-      - run: make init ENV=${{ env.ENV }}
-
-      - name: Download saved plan
-        uses: actions/download-artifact@v4
-        with:
-          name: tfplan-prod
-
-      - run: make ci-apply ENV=${{ env.ENV }}
+      - name: Smoke test
+        run: make smoke

@@ -8,8 +8,8 @@ Accepted (2026-05-01)
 
 ADR-0003 established default encryption as one of the four bucket hardening layers. The remaining decision is which encryption strategy to use. Two managed options exist:
 
-- **SSE-S3 (AES256)** — AWS manages the key transparently. No per-call KMS charges, no additional IAM grants, no encryption headers on pre-signed PUTs.
-- **SSE-KMS with a customer-managed key (CMK)** — adds a second, independent permission gate (`kms:Decrypt` in addition to `s3:GetObject`), full CloudTrail auditability on every decrypt, and a kill switch (disabling the key makes every encrypted object immediately inaccessible). Cost concern is largely neutralized by S3 Bucket Keys, which cache a data key per bucket partition for ~24 hours and reduce KMS API calls by roughly 99%.
+- **SSE-S3 (AES256)**—AWS manages the key transparently. No per-call KMS charges, no additional IAM grants, no encryption headers on pre-signed PUTs.
+- **SSE-KMS with a customer-managed key (CMK)**—adds a second, independent permission gate (`kms:Decrypt` in addition to `s3:GetObject`), full CloudTrail auditability on every decrypt, and a kill switch (disabling the key makes every encrypted object immediately inaccessible). Cost concern is largely neutralized by S3 Bucket Keys, which cache a data key per bucket partition for ~24 hours and reduce KMS API calls by roughly 99%.
 
 The AWS-managed KMS key (`aws/s3`) is a third option but a strictly dominated one: it incurs KMS operational cost without giving control over the key policy or the ability to disable it.
 
@@ -48,7 +48,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "ingestion" {
 }
 ```
 
-The extractor Lambda's IAM policy will also need `kms:Decrypt` and `kms:GenerateDataKey` on the key. The presigner does not — it never reads encrypted bytes, only signs URLs.
+The extractor Lambda's IAM policy will also need `kms:Decrypt` and `kms:GenerateDataKey` on the key. The presigner does not—it never reads encrypted bytes, only signs URLs.
 
 ## Consequences
 
@@ -66,5 +66,5 @@ Neutral:
 
 ## Alternatives considered
 
-- **AWS-managed KMS key (`aws/s3`)**: rejected — incurs KMS operational cost (per-call charges, IAM grants, encryption headers on pre-signed PUTs) without granting control over the key policy or the ability to disable it. Strictly worse than both SSE-S3 and a CMK.
-- **SSE-KMS with a CMK now**: deferred — the correct posture for a production workload ingesting PII or regulated documents, but disproportionate for a portfolio project with no real data. The switch should happen at the boundary where real documents begin arriving.
+- **AWS-managed KMS key (`aws/s3`)**: rejected—incurs KMS operational cost (per-call charges, IAM grants, encryption headers on pre-signed PUTs) without granting control over the key policy or the ability to disable it. Strictly worse than both SSE-S3 and a CMK.
+- **SSE-KMS with a CMK now**: deferred—the correct posture for a production workload ingesting PII or regulated documents, but disproportionate for a portfolio project with no real data. The switch should happen at the boundary where real documents begin arriving.

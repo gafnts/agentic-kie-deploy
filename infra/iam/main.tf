@@ -3,7 +3,7 @@ data "aws_caller_identity" "current" {}
 locals {
   account_id    = data.aws_caller_identity.current.account_id
   oidc_provider = "arn:aws:iam::${local.account_id}:oidc-provider/token.actions.githubusercontent.com"
-  envs          = ["local", "dev", "prod"]
+  envs          = ["local", "staging", "prod"]
 }
 
 data "aws_iam_policy_document" "trust_local" {
@@ -17,7 +17,7 @@ data "aws_iam_policy_document" "trust_local" {
   }
 }
 
-data "aws_iam_policy_document" "trust_dev" {
+data "aws_iam_policy_document" "trust_staging" {
   statement {
     effect  = "Allow"
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -162,9 +162,9 @@ resource "aws_iam_role" "deploy" {
 
   name = "agentic-kie-${each.key}-deploy"
   assume_role_policy = {
-    "local" = data.aws_iam_policy_document.trust_local.json
-    "dev"   = data.aws_iam_policy_document.trust_dev.json
-    "prod"  = data.aws_iam_policy_document.trust_prod.json
+    "local"   = data.aws_iam_policy_document.trust_local.json
+    "staging" = data.aws_iam_policy_document.trust_staging.json
+    "prod"    = data.aws_iam_policy_document.trust_prod.json
   }[each.key]
 
   tags = {

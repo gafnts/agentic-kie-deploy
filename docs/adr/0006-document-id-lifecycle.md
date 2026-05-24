@@ -35,8 +35,8 @@ UUIDv7 is preferred over UUIDv4 because it is time-sortable; if a GSI on creatio
 ### Contract
 
 - **Format**: UUIDv7, lowercase, hyphenated (36 characters).
-- **Key shape**: `uploads/{yyyy}/{mm}/{dd}/{document_id}`. The date prefix is for human-readable bucket browsing and S3 request-rate partitioning; it is not authoritative — only the `document_id` segment is.
-- **Authority**: the presigner is the only writer of new IDs. The extractor never invents an ID; if it cannot parse one out of the object key, it sends the message to the DLQ.
+- **Key shape**: `uploads/{yyyy}/{mm}/{dd}/{document_id}`. The date prefix is for human-readable bucket browsing and S3 request-rate partitioning; it is not authoritative—only the `document_id` segment is.
+- **Authority**: the presigner is the only writer of new IDs. The extractor never invents an ID; if it cannot parse one out of the object key, it acks the message—a malformed key is a poison-pill, not a retryable failure (ADR-0009).
 
 ### Module responsibilities
 
@@ -57,7 +57,7 @@ Positive:
 Negative:
 
 - The S3 key format becomes a contract between presigner and extractor. Changing it later requires coordinated deploys or a parser that accepts both shapes during the transition.
-- The `document_id` is a guessable-shaped opaque pointer, not a secret. Any future read endpoint must enforce its own authorization — knowing a `document_id` must not by itself authorize reading the result.
+- The `document_id` is a guessable-shaped opaque pointer, not a secret. Any future read endpoint must enforce its own authorization—knowing a `document_id` must not by itself authorize reading the result.
 
 Neutral:
 
@@ -65,7 +65,7 @@ Neutral:
 
 ## Alternatives considered
 
-- **Client-supplied ID**: rejected — no server control, collision and overwrite risk, no way to enforce uniqueness without an extra lookup on every presign request.
-- **Extractor-generated ID**: rejected — the client never learns the ID, so no polling is possible without a synchronous callback channel that defeats the asynchronous design from ADR-0001.
-- **S3 version ID as primary key**: rejected — version IDs are opaque, S3-internal, and only known after the upload completes; the client cannot receive one at presign time.
+- **Client-supplied ID**: rejected—no server control, collision and overwrite risk, no way to enforce uniqueness without an extra lookup on every presign request.
+- **Extractor-generated ID**: rejected—the client never learns the ID, so no polling is possible without a synchronous callback channel that defeats the asynchronous design from ADR-0001.
+- **S3 version ID as primary key**: rejected—version IDs are opaque, S3-internal, and only known after the upload completes; the client cannot receive one at presign time.
 - **UUIDv4 instead of UUIDv7**: viable, and the right choice if creation-time leakage is ever a concern. UUIDv7 is preferred here for its sortability.
