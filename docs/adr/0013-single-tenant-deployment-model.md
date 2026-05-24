@@ -19,7 +19,7 @@ The extractor (ADR-0009) is the constraint that decides it. The container image 
 - The model identifier (`LLM_MODEL`) and the secrets path (`LLM_PROVIDER_SECRET_ARN`).
 - The memory, timeout, and ephemeral-storage sizing tuned for that workload.
 
-The DynamoDB schema (ADR-0007) is the answer shape for one document type. The S3 result address (ADR-0011) is one key shape that one consumer subscribes to. The IAM model on the uploader (ADR-0010) is open within the account because the assumption is the caller set is small, known, and coordinated. All of those assumptions hold together cleanly if the deployment shape is per-(caller, document type), and each of them needs to be re-litigated if the deployment shape is multi-tenant.
+The DynamoDB schema (ADR-0007) is the answer shape for one document type. The S3 result address (ADR-0011) is one key shape with one schema that consumers subscribe to. The IAM model on the uploader (ADR-0010) is open within the account because the assumption is the caller set is small, known, and coordinated. All of those assumptions hold together cleanly if the deployment shape is per-(caller, document type), and each of them needs to be re-litigated if the deployment shape is multi-tenant.
 
 | Model                   | Operational cost per team           | Cross-team coupling                                         | What changes per document type            |
 | ----------------------- | ----------------------------------- | ----------------------------------------------------------- | ----------------------------------------- |
@@ -34,7 +34,7 @@ The pipeline is a deployable template, not a platform. Each deployed instance:
 
 - Has exactly **one upstream caller** (one IAM principal that invokes the uploader API).
 - Processes exactly **one document type** (one extractor image with its document-type configuration baked in).
-- Has exactly **one downstream consumer** (one entity subscribing to the result S3 prefix).
+- Publishes exactly **one result schema** to one S3 prefix. The number of readers of that prefix is not fixed: one is the common case, but additional readers (e.g., a downstream analytics or compliance consumer) can be granted read access to the bucket without changing the architecture, as long as they all read against the same schema contract.
 
 Multi-document support is achieved by deploying multiple instances of the modules, not by extending an instance. A team that needs to extract three document types deploys three instances; each is isolated end-to-end (bucket, queue, table, extractor, presigner, results publisher, analytics bucket, alarms).
 
@@ -58,7 +58,7 @@ If, in a given environment, the account boundary is *not* a sufficient perimeter
 | `uploader`   | One IAM principal expected to invoke `POST /uploads`. CloudWatch's `client_principal` should be the same value across calls in a healthy state; a different principal is an investigative signal. |
 | `extractor`  | One container image, one document-type configuration, one secret path. The image identity *is* the instance's identity.                                                        |
 | `table`      | One results table per instance. The `extracted_fields` map shape is determined by the extractor's configuration; no cross-instance schema reuse is needed or attempted.        |
-| `results`    | One S3 result prefix, one expected consumer subscribed to it. The Glue table and Athena workgroup are per-instance—cross-instance analytics is a future federation problem, not an in-instance problem. |
+| `results`    | One S3 result prefix, one schema contract. Readers of that prefix (one in the common case, more if granted) all read against the same schema. The Glue table and Athena workgroup are per-instance—cross-instance analytics is a future federation problem, not an in-instance problem. |
 | `iam`        | The `Environment`-tagged deny guard is the per-env boundary inside an instance; it does not become a per-tenant boundary, because there is no tenancy concept inside an instance. |
 
 ### Why not a platform
@@ -92,7 +92,7 @@ Negative:
 Neutral:
 
 - A future multi-tenant platform is not foreclosed. The right shape, if and when it is needed, is a thin platform layer that vends instances of these modules (think AWS Service Catalog, or a Terraform module registry with a small enrollment workflow). The modules themselves do not need to change.
-- The "one consumer" property on the result side is one-sided: the caller is responsible for fan-out if it has multiple downstream consumers. Its SNS, EventBridge bus, or Step Functions topology is the right place for that fan-out, not ours.
+- Multiple readers of the result prefix are supported by default through S3 bucket permissions—an additional consumer (e.g., a compliance reviewer, an AI team consuming results for fine-tuning) is granted read access and pulls directly. Push-style fan-out (SNS, EventBridge, Step Functions) is the caller's responsibility if its consumers need notifications rather than periodic reads, and is out of scope for the instance.
 
 ## Alternatives considered
 
