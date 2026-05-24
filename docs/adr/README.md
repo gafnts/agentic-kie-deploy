@@ -27,7 +27,7 @@ This directory records the significant architectural decisions made in this proj
 | [0007](0007-table-schema-and-encryption.md) | Table schema, bounded item size, and encryption posture | Accepted |
 | [0008](0008-ecr-registry-stack-and-digest-pinned-images.md) | ECR registry as a separate stack, digest-pinned extractor images | Accepted |
 | [0009](0009-extractor-lambda.md) | Extractor Lambda sizing, concurrency, idempotency, observability and IAM posture | Accepted |
-| [0010](0010-uploader-module.md) | Uploader module (presigner, API Gateway, IAM authentication) | Proposed |
-| [0011](0011-s3-as-result-delivery.md) | S3 as result delivery | Proposed |
-| [0012](0012-results-module.md) | Results module (Streams consumer, analytics bucket, Glue and Athena) | Proposed |
-| [0013](0013-single-tenant-deployment-model.md) | Single-tenant deployment model | Proposed |
+| [0010](0010-uploader-module.md) | Uploader module (presigner, API Gateway, IAM authentication) | Accepted |
+| [0011](0011-s3-as-result-delivery.md) | S3 as result delivery | Accepted |
+| [0012](0012-results-module.md) | Results module (Streams consumer, analytics bucket, Glue and Athena) | Accepted |
+| [0013](0013-single-tenant-deployment-model.md) | Single-tenant deployment model | Accepted |

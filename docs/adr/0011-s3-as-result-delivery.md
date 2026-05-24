@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-05-24). Supersedes ADR-0002.
+Accepted (2026-05-24). Supersedes ADR-0002.
 
 ## Context
 
