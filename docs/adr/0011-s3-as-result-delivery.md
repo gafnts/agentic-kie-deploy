@@ -20,7 +20,7 @@ For an AWS-native caller, three options dominate:
 | SNS topic | Extractor (or downstream) publishes to a topic; caller subscribes | Receives a message per result; needs an HTTPS or queue subscription |
 | S3 result object | Extractor (or downstream) writes JSON to a known S3 address; caller subscribes to `s3:ObjectCreated:*` on the prefix | Receives an EventBridge event; reacts with a Lambda, Step Functions task, or Pipes consumer |
 
-The caller knows `document_id` from the presign response (ADR-0006), which means it knows the result address before the result exists. That is load-bearing: it lets the caller install an event subscription on the exact key ahead of time, and the trigger fires on first write—not on a poll loop, not on a webhook delivery, but on the result object itself coming into existence.
+The caller knows `document_id` from the presign response (ADR-0006), which means it knows the result address before the result exists. That matters: it lets the caller install an event subscription on the exact key ahead of time, and the trigger fires on first write—not on a poll loop, not on a webhook delivery, but on the result object itself coming into existence.
 
 ## Decision
 

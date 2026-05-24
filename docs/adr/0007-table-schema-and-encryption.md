@@ -12,7 +12,7 @@ The `table` module is the system of record for extraction results. Four decision
 
 `document_id` (UUIDv7, fixed in ADR-0006) is the only identifier callers ever need. There is at most one canonical extraction per document, and the polling endpoint reads by `GetItem(document_id)`. A sort key would only earn its place if we kept extraction history (e.g. one row per re-run), and that is not a current requirement.
 
-The PK choice is also load-bearing for idempotency. Because `document_id` is minted once at presign (ADR-0006), every SQS redelivery of the same upload event resolves to the same partition key. Without that, no amount of conditional writes in the extractor would help—retries would simply land on different rows.
+The PK choice is also critical for idempotency. Because `document_id` is minted once at presign (ADR-0006), every SQS redelivery of the same upload event resolves to the same partition key. Without that, no amount of conditional writes in the extractor would help—retries would simply land on different rows.
 
 ### What goes inside an item
 

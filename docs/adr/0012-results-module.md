@@ -264,7 +264,7 @@ Positive:
 
 Negative:
 
-- DynamoDB Streams is now load-bearing for result delivery. A Streams outage or a stuck consumer delays delivery even though extraction itself succeeded. Mitigated by Streams' 24-hour retention and the on-failure DLQ.
+- DynamoDB Streams is now a critical dependency for result delivery. A Streams outage or a stuck consumer delays delivery even though extraction itself succeeded. Mitigated by Streams' 24-hour retention and the on-failure DLQ.
 - The analytics bucket cannot use cold-tier lifecycle transitions because Athena cannot query Glacier objects. Storage cost grows linearly with results forever unless an expiration policy is added—recorded as a deliberate MVP choice, not an oversight.
 - Two Lambdas are added (publisher + future alarm action handlers if any), and one more SQS queue (publisher DLQ). The operational surface grows.
 - Glue schema is checked in alongside the result payload shape. Changing the result shape requires updating the Glue table—coupled by design, but a coupling the schema-by-crawler alternative would have hidden until query time.

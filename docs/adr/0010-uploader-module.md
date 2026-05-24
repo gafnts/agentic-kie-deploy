@@ -152,7 +152,7 @@ Neutral:
 
 - **API keys via API Gateway usage plans.** Rejected—introduces a secret-rotation story and a parallel auth surface that the caller does not need (it already has an IAM role).
 - **OAuth / JWT via Cognito.** Rejected—needs an issuer, a token-validation step on every request, and a refresh flow. Heavy for one internal AWS-native caller.
-- **No presigner; caller PUTs directly to S3 with its own credentials.** Rejected—gives up server-minted IDs (ADR-0006), signature-pinned keys, and the "caller learns the result address before the result exists" property that ADR-0011 depends on. The presigner is load-bearing for those reasons, not for auth.
+- **No presigner; caller PUTs directly to S3 with its own credentials.** Rejected—gives up server-minted IDs (ADR-0006), signature-pinned keys, and the "caller learns the result address before the result exists" property that ADR-0011 depends on. The presigner exists for those reasons, not for auth.
 - **REST API instead of HTTP API.** Rejected—REST API is more expensive per request and the features it adds (usage plans, request validators, edge-optimized endpoints) are not needed here.
 - **Container image for the presigner.** Rejected—the function imports `boto3` and signs one URL. Container cold starts (3–10 s per ADR-0009) are unjustified for that workload; zip cold starts are sub-second.
 - **Generate UUIDv4 instead of UUIDv7.** Rejected—settled in ADR-0006. UUIDv7's time-ordering is the reason.

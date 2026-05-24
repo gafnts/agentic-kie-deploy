@@ -26,7 +26,7 @@ The DynamoDB schema (ADR-0007) is the answer shape for one document type. The S3
 | Template / per-instance | One Terraform `apply`, cents to single dollars/mo idle | None                                            | A new instance (full module set)          |
 | Multi-tenant platform   | Shared infra + per-tenant config    | Shared blast radius, noisy neighbors, shared limits         | A registry entry + a deploy of the dispatch logic |
 
-The per-instance cost looks higher in dollar terms but vanishes against the multi-tenant tax—extractor dispatch, per-tenant rate limits, isolation in keys and table partitions, schema registry, per-tenant cost attribution, version skew between tenants. Every one of those is a load-bearing system in a multi-tenant platform and a non-feature in a per-instance template.
+The per-instance cost looks higher in dollar terms but vanishes against the multi-tenant tax—extractor dispatch, per-tenant rate limits, isolation in keys and table partitions, schema registry, per-tenant cost attribution, version skew between tenants. Every one of those is a critical system in a multi-tenant platform and a non-feature in a per-instance template.
 
 ## Decision
 

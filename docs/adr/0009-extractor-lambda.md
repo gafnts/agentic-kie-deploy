@@ -70,7 +70,7 @@ Both deploy workflows already resolve the digest as a `build-and-push` job outpu
 - **`deploy-staging.yml`**: the `apply` job runs `terraform apply` directly. The digest is injected there as `-var=extractor_image_digest=${{ needs.build-and-push.outputs.image_digest }}`, closing the TODO at `.github/workflows/deploy-staging.yml:130-131`.
 - **`deploy-prod.yml`**: the `apply` job consumes a saved plan artifact (`tfplan.prod`) produced by an earlier `plan` job. The digest must therefore be baked into the *plan*, not the apply—passed as `-var=extractor_image_digest=…` to `make ci-plan` in the `plan` job, closing the TODO at `.github/workflows/deploy-prod.yml:137-138`. The apply step consumes the plan bytes verbatim and inherits the digest from there.
 
-The asymmetry is load-bearing: a saved-plan workflow that takes a `-var` at apply time would diverge from the plan that was reviewed, which is exactly the property the saved-plan pattern exists to prevent.
+The asymmetry is deliberate: a saved-plan workflow that takes a `-var` at apply time would diverge from the plan that was reviewed, which is exactly the property the saved-plan pattern exists to prevent.
 
 ### Sizing
 
@@ -313,7 +313,7 @@ Neutral:
 ## Alternatives considered
 
 - **Zip Lambda with layers instead of a container image.** Rejected—ADR-0001 and ADR-0008 settled the packaging question on dependency-size grounds. Re-litigating it here would invalidate the registry stack.
-- **`batch_size > 1` (e.g. 5 or 10).** Rejected at MVP—the per-message processing time is dominated by the LLM call, so batching does not amortize anything meaningful, and it complicates the failure model (partial batch failure handling becomes load-bearing rather than forward-compatibility scaffolding).
+- **`batch_size > 1` (e.g. 5 or 10).** Rejected at MVP—the per-message processing time is dominated by the LLM call, so batching does not amortize anything meaningful, and it complicates the failure model (partial batch failure handling becomes a real concern rather than forward-compatibility scaffolding).
 - **No `maximum_concurrency` cap.** Rejected—without a cap, an ingestion burst scales Lambda up to the account's concurrent-execution limit (default 1,000) and drives a corresponding spike of parallel LLM calls. The cap is the cost-bound on accidents.
 - **x86_64 architecture.** Rejected for cost. The CI change is mechanical (one `runs-on` swap, one `buildx` invocation) and arm64 has no behavioral implications for Python + HTTP clients.
 - **QEMU emulation on x86_64 runners instead of native arm64 runners.** Rejected—2–3× slower builds for no benefit on a public repo where native arm64 runners are free. Emulation is also a source of subtle "works in CI, fails at deploy" syscall-difference bugs.
