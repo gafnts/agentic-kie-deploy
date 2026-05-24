@@ -10,7 +10,7 @@
 
 ---
 
-<p align="center">A client uploads a document to S3 and receives structured fields asynchronously. The pipeline is fully serverless, event-driven, and Terraform-provisioned on AWS.</p>
+<p align="center">An AWS-native caller uploads a document and consumes the structured result from a known S3 address. The pipeline is fully serverless, event-driven, and Terraform-provisioned on AWS.</p>
 
 ## Contents
 
@@ -28,33 +28,40 @@
 
 ## Architecture
 
-The pipeline is fully asynchronous. A client calls a small presigner Lambda behind an API Gateway HTTP endpoint, which returns a short-lived pre-signed S3 PUT URL. The client uploads the document directly to S3, bypassing API Gateway payload limits entirely. The bucket emits an `Object Created` event to EventBridge, which routes it to an SQS queue with a dead-letter queue and redrive policy for resilience. SQS then triggers the extractor Lambda, packaged as a container image from ECR to accommodate heavy LLM dependencies. The extractor runs the [`agentic-kie`](https://github.com/gafnts/agentic-kie) library against the document and writes the resulting structured record to a DynamoDB table keyed by document ID.
+The pipeline is fully asynchronous and end-to-end AWS-native. An in-account caller signs a `POST /uploads` request with SigV4 against the uploader's API Gateway HTTP API (authorized via `AWS_IAM`); the presigner Lambda mints a UUIDv7 `document_id` and returns it alongside a short-lived pre-signed S3 PUT URL. The caller uploads the document directly to the ingestion bucket, bypassing API Gateway payload limits. The bucket emits an `Object Created` event to EventBridge, which routes it to an SQS queue (with a dead-letter queue and redrive policy) that triggers the extractor Lambda—packaged as a container image from ECR to accommodate heavy LLM dependencies.
+
+The extractor runs the [`agentic-kie`](https://github.com/gafnts/agentic-kie) library and conditionally writes the structured record to a DynamoDB table keyed by `document_id`. The terminal write fans out through DynamoDB Streams to a small publisher Lambda, which writes the result payload as JSON to a separate analytics bucket at an address the caller already learned at presign time. The caller's `s3:ObjectCreated:*` subscription on that prefix fires the moment the object lands; the same objects back a Glue catalog table queried through a dedicated Athena workgroup. Each deployed instance serves exactly one caller and one document type—multi-document support is many instances, not one shared pipeline.
 
 ![architecture](./docs/architecture.png)
 
 | Component | Service | Role |
 |---|---|---|
-| Presigner | Lambda + API Gateway | Issues short-lived pre-signed PUT URLs to clients |
-| Ingestion bucket | S3 | Receives uploads directly from clients, emits Object Created events |
+| Uploader API | API Gateway HTTP API (`AWS_IAM`) | Authorizes SigV4-signed `POST /uploads` from in-account callers |
+| Presigner | Lambda (zip) | Mints `document_id` (UUIDv7) and returns a short-lived pre-signed PUT URL |
+| Ingestion bucket | S3 | Receives uploads directly from callers, emits Object Created events |
 | Event router | EventBridge | Routes bucket events to the extraction queue |
 | Queue | SQS + DLQ | Buffers events, retries on failure, isolates bad messages |
 | Extractor | Lambda (container image) | Runs the agentic LLM extraction loop |
-| Store | DynamoDB | Holds structured results, keyed by document ID |
+| Results table | DynamoDB (+ Streams) | Holds the canonical extraction row, keyed by `document_id` |
+| Result publisher | Lambda (zip) | Consumes Streams, writes terminal results to the analytics bucket |
+| Analytics bucket | S3 | Holds result objects; the caller subscribes to its `s3:ObjectCreated:*` events |
+| Catalog | Glue table + Athena workgroup | Ad-hoc query layer over the analytics partition |
 
 ---
 
 ## Modules
 
-The infrastructure is organized as small, per-concern Terraform modules wired together at the root in [infra/main.tf](infra/main.tf).
+The infrastructure is organized as small, per-concern Terraform modules wired together at the root in [infra/main.tf](infra/main.tf). The order below mirrors the data flow.
 
 | Module | Path | Status |
 |---|---|---|
+| `uploader` | [infra/modules/uploader/](infra/modules/uploader/) | Planned |
 | `bucket` | [infra/modules/bucket/](infra/modules/bucket/) | Implemented |
 | `queue` | [infra/modules/queue/](infra/modules/queue/) | Implemented |
-| `table` | [infra/modules/table/](infra/modules/table/) | Implemented |
 | `extractor` | [infra/modules/extractor/](infra/modules/extractor/) | Implemented |
+| `table` | [infra/modules/table/](infra/modules/table/) | Implemented |
+| `results` | [infra/modules/results/](infra/modules/results/) | Planned |
 | `alarms` | [infra/modules/alarms/](infra/modules/alarms/) | Implemented |
-| `uploader` | [infra/modules/uploader/](infra/modules/uploader/) | Planned |
 
 ### Bucket
 
