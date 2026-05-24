@@ -176,7 +176,7 @@ What changes:
 
 Positive:
 
-- Predictable, single-digit-KB items. Polling stays single-GetItem and cheap regardless of document length.
+- Predictable, single-digit-KB items. Keeps the extractor's write path cheap and the Stream payload small regardless of document length; the read-cost argument that motivated this originally is retired now that consumers read S3 (see "Role under S3-as-result-delivery").
 - The PK is a deliberate contributor to idempotency, not an incidental choice—pairing it with the extractor's conditional writes gives end-to-end exactly-once semantics on top of at-least-once delivery.
 - The extractor's write path is one DDB call, no dual-write coordination with S3.
 - Encryption posture is consistent with the storage module's, and the migration story to CMKs is symmetric.
