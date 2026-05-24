@@ -24,6 +24,8 @@ Two upstream contracts narrow the design space:
 - The event payload is `Object Created` from EventBridge, forwarded verbatim by SQS. `document_id` is parsed out of `s3.object.key` (ADR-0006); a parse failure is a poison-pill and must not retry.
 - The table schema (ADR-0007) is the answer and only the answer; OCR text and agent traces are *not* persisted to DynamoDB. The extractor's hot path is one DDB call, not a dual-write.
 
+The extractor's container image is also the carrier of the deployed instance's identity. It contains the `agentic-kie` configuration for one specific document type—prompts, target schema, validators—alongside the model identifier and the secrets path. The pipeline as a whole is a deployable template for the (caller, document type) pair the image was built for; changing document type means a new image and a new instance, not a new code path inside this Lambda (ADR-0013).
+
 ## Decision
 
 ### Stack layout

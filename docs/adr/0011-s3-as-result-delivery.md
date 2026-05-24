@@ -10,6 +10,8 @@ ADR-0001 fixed the pipeline as asynchronous: the extractor writes to DynamoDB bu
 
 The integration shape is now settled. The caller is an internal AWS service: a workflow engine, a Lambda, an EventBridge consumer. It runs in the same account, has its own IAM role, and wants to react to results rather than poll for them. That shifts the calculus around result delivery in ways that make ADR-0002's deferral the wrong answer in the new model—not because the deferral was wrong at the time, but because the constraint set changed.
 
+The deployment model is also settled (ADR-0013): one instance per (caller, document type) pair, with one upstream caller and one expected downstream consumer. The "one consumer" property is what makes a single S3 result address and a single Glue/Athena partition the right shape; if a caller has multiple internal subscribers for the same result stream, the fan-out belongs on its side (its own SNS topic, EventBridge bus, or Step Functions topology), not on ours.
+
 For an AWS-native caller, three options dominate:
 
 | Option | Mechanism | What the caller does |

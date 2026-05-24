@@ -30,3 +30,4 @@ This directory records the significant architectural decisions made in this proj
 | [0010](0010-uploader-module.md) | Uploader module (presigner, API Gateway, IAM authentication) | Proposed |
 | [0011](0011-s3-as-result-delivery.md) | S3 as result delivery | Proposed |
 | [0012](0012-results-module.md) | Results module (Streams consumer, analytics bucket, Glue and Athena) | Proposed |
+| [0013](0013-single-tenant-deployment-model.md) | Single-tenant deployment model | Proposed |

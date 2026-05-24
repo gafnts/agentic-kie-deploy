@@ -53,6 +53,15 @@ The caller's role needs:
 
 This grant is the caller's responsibility, not the uploader module's. The module outputs the API ARN so the caller can scope its grant precisely; nothing in this module assumes how the caller's IAM is structured.
 
+#### Two perimeters, not one
+
+The route is open to any in-account principal that holds `execute-api:Invoke` on the ARN. That is intentional and only safe in composition with the second perimeter the architecture provides: the extractor's document-type coupling. The full access-control story is:
+
+1. **Account IAM** is the outer perimeter. Cross-account principals cannot sign a valid SigV4 request against this route; the boundary holds without any per-caller configuration on our side.
+2. **Document-type coupling** is the inner perimeter. An in-account principal that successfully uploads a document of the wrong type produces useless output—extraction fails or returns garbage, the result object lands in the wrong shape, the downstream consumer discards it. There is nothing to gain from "sneaking in" because the pipeline only produces value for the one document type its extractor was built for.
+
+The single-tenant deployment contract (ADR-0013)—one caller, one document type per instance—is what makes this composition coherent. If a future environment cannot rely on the account boundary (multiple unrelated teams, a regulated workload), the available hardening lever is a Lambda authorizer that checks the caller's principal ARN against an allowlist; see the alternatives section.
+
 ### Presigner Lambda
 
 | Lever | Value | Reasoning |
@@ -93,7 +102,7 @@ The caller is an AWS service with its own IAM role; in principle it could PUT di
 2. **The object key is signature-pinned.** The presigned URL fixes the exact `uploads/{yyyy}/{mm}/{dd}/{document_id}` key. The caller cannot upload to a different key under the same URL. This is the property ADR-0006 leans on to keep the ID server-controlled rather than caller-asserted.
 3. **The caller needs the result address before the upload (ADR-0011).** Because results land at `extractions/{yyyy}/{mm}/{dd}/{document_id}.json`, the caller needs `document_id` *before* the result exists to install an S3 event subscription on the right key. The presign response is the only place that ID is exposed.
 
-Removing the presigner means giving up server-controlled IDs, signature-pinned keys, and the address-before-existence property. The presigner is small, but it is load-bearing.
+Removing the presigner means giving up server-controlled IDs, signature-pinned keys, and the address-before-existence property.
 
 ### Module wiring
 
@@ -127,7 +136,7 @@ Positive:
 - Caller identity lands in CloudTrail by default—`execute-api:Invoke` is logged with the principal ARN.
 - The presigner's IAM role is narrow (one `s3:PutObject` on one prefix). The blast radius of a Lambda compromise is bounded to signing URLs for the ingestion bucket.
 - HTTP API is the cheaper API Gateway flavor; cost is a non-line-item at portfolio scale.
-- Caller-side IAM is the audit boundary for "who can upload." Adding or removing a caller is one IAM policy change on their side, nothing in our infrastructure.
+- Caller-side IAM is the outer audit boundary for "who can upload." Adding or removing a caller is one IAM policy change on their side, nothing in our infrastructure. The inner boundary—document-type coupling in the extractor (ADR-0009, ADR-0013)—means an in-account principal that grants itself the action still cannot produce useful pipeline output without matching the deployed instance's document type.
 
 Negative:
 
@@ -148,4 +157,5 @@ Neutral:
 - **Container image for the presigner.** Rejected—the function imports `boto3` and signs one URL. Container cold starts (3–10 s per ADR-0009) are unjustified for that workload; zip cold starts are sub-second.
 - **Generate UUIDv4 instead of UUIDv7.** Rejected—settled in ADR-0006. UUIDv7's time-ordering is the reason.
 - **Lambda authorizer with per-principal quotas.** Deferred—rate-limiting per caller is not a requirement today and adding it before it is needed would mean carrying an authorizer Lambda, a quota table, and a cache for zero current value. The shape of the change when needed is recorded above.
+- **Lambda authorizer for principal allowlisting.** Deferred—the account boundary plus document-type coupling (ADR-0013) is the assumed perimeter at this scale; tightening to a specific principal ARN is a Lambda authorizer that reads `request_context.identity.userArn` and matches it against an env-provided allowlist. Same mechanism as the per-principal-quotas authorizer above; the two would collapse into one authorizer if both became needed. Out of scope until the account boundary stops being sufficient (multiple unrelated teams in one account, a regulated workload).
 - **Synchronous extraction endpoint (return results from the same call).** Rejected—settled in ADR-0001 on payload-size and timeout grounds; revisiting here would undo that decision.
