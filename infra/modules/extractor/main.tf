@@ -44,16 +44,10 @@ data "aws_iam_policy_document" "extractor" {
   }
 
   statement {
-    sid    = "IngestionReadObject"
-    effect = "Allow"
-    actions = [
-      "s3:GetObject",
-      "s3:ListBucket",
-    ]
-    resources = [
-      var.ingestion_bucket_arn,
-      "${var.ingestion_bucket_arn}/*",
-    ]
+    sid       = "IngestionReadObject"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${var.ingestion_bucket_arn}/*"]
   }
 
   statement {
@@ -112,6 +106,7 @@ resource "aws_lambda_function" "extractor" {
       LANGSMITH_SECRET_ARN    = var.langsmith_secret_arn
       LANGSMITH_PROJECT       = var.langsmith_project
       RESULTS_TABLE_NAME      = var.results_table_name
+      SQS_MAX_RECEIVE_COUNT   = tostring(var.queue_max_receive_count)
     }
   }
 

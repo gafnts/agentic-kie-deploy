@@ -6,7 +6,7 @@ Accepted (2026-05-09)
 
 ## Context
 
-ADR-0001 fixed the extractor as a container Lambda packaged from ECR, on the grounds that `agentic-kie-deploy`'s ML and LLM dependencies do not fit comfortably under Lambda's zipped layer limits. That decision delegated the registry to a future module; this ADR settles its shape and — equally important — the deployment choreography that hangs off it.
+ADR-0001 fixed the extractor as a container Lambda packaged from ECR, on the grounds that `agentic-kie-deploy`'s ML and LLM dependencies do not fit comfortably under Lambda's zipped layer limits. That decision delegated the registry to a future module; this ADR settles its shape and—equally important—the deployment choreography that hangs off it.
 
 Five concerns drive the design and they are coupled enough that one ADR is clearer than five:
 
@@ -26,9 +26,9 @@ The Lambda needs a stable handle to a specific build. Three handles are availabl
 
 - **Tag** (e.g. `git-sha`). Readable in plans, requires `IMMUTABLE` repository policy to prevent silent rolls.
 - **Digest** (`sha256:…`). Cryptographically pins the bytes; immune to tag mutability bugs by construction.
-- **Mutable convenience tag** (e.g. `dev-latest`). Forces redeployment via Lambda update each push; loses replay/rollback determinism and is incompatible with `IMMUTABLE`.
+- **Mutable convenience tag** (e.g. `staging-latest`). Forces redeployment via Lambda update each push; loses replay/rollback determinism and is incompatible with `IMMUTABLE`.
 
-Digest pinning is strictly stronger than tag pinning: it produces deterministic plans (the digest changes iff the bytes changed), it survives accidental tag-mutability misconfigurations, and it makes Terraform-level rollback (revert the tfvar, re-apply) a one-line operation. The ergonomic loss — the digest is a 71-character opaque string in the plan — is mitigated by sourcing it from CI rather than typing it.
+Digest pinning is strictly stronger than tag pinning: it produces deterministic plans (the digest changes iff the bytes changed), it survives accidental tag-mutability misconfigurations, and it makes Terraform-level rollback (revert the tfvar, re-apply) a one-line operation. The ergonomic loss—the digest is a 71-character opaque string in the plan—is mitigated by sourcing it from CI rather than typing it.
 
 ### Lifecycle policy
 
@@ -43,7 +43,7 @@ A "keep last 10 tagged + expire untagged after 1 day" policy bounds steady-state
 
 ECR offers two scanning modes. Basic scan-on-push runs an AWS-native CVE scan once per push, free, with findings exposed on the ECR console and as EventBridge events. Enhanced scanning via Inspector rescans continuously and covers OS plus language packages, but it is configured at the account/region level (one config governs the entire registry) and bills per image.
 
-Scan-on-push is per-repository, fits cleanly inside the registry module, and gives a CVE signal at the moment a build lands. Enhanced is the right answer at production scale and the upgrade path is non-breaking — turn it on later via `aws_ecr_registry_scanning_configuration` with a `repository_filter` of `agentic-kie-deploy-*`.
+Scan-on-push is per-repository, fits cleanly inside the registry module, and gives a CVE signal at the moment a build lands. Enhanced is the right answer at production scale and the upgrade path is non-breaking—turn it on later via `aws_ecr_registry_scanning_configuration` with a `repository_filter` of `agentic-kie-deploy-*`.
 
 ### Encryption and repository policy
 
@@ -65,10 +65,10 @@ infra/registry/
   terraform.tf
   envs/
     local.backend.tfbackend
-    dev.backend.tfbackend
+    staging.backend.tfbackend
     prod.backend.tfbackend
     local.tfvars
-    dev.tfvars
+    staging.tfvars
     prod.tfvars
 ```
 
@@ -94,7 +94,7 @@ resource "aws_ecr_repository" "extractor" {
 }
 ```
 
-`force_delete` follows the same rule as the storage and table modules: prod must not be wiped accidentally, but `make destroy ENV=local` and `ENV=dev` should work.
+`force_delete` follows the same rule as the storage and table modules: prod must not be wiped accidentally, but `make destroy ENV=local` and `ENV=staging` should work.
 
 ### Lifecycle policy
 
@@ -181,11 +181,11 @@ The Lambda resource references it as `image_uri = "${data.aws_ecr_repository.ext
 
 ### Build-and-push pipeline
 
-CI gains a `build-and-push` job that runs before `apply` on the service stack, gated on changes under `src/extractor/**` (and the workflow file itself). Service-only changes — Terraform tweaks, IAM tightening — re-apply with the previously-deployed digest and skip the Docker work entirely.
+CI gains a `build-and-push` job that runs before `apply` on the service stack, gated on changes under `src/extractor/**` (and the workflow file itself). Service-only changes—Terraform tweaks, IAM tightening—re-apply with the previously-deployed digest and skip the Docker work entirely.
 
 The job builds the image from `src/extractor`, tags it with the short commit SHA, pushes to the env repository, then resolves the resulting digest via `aws ecr describe-images` and publishes it as a job output. The downstream `apply` job consumes that output as `-var="extractor_image_digest=…"`. The digest, not the tag, is the contract between CI and Terraform; the tag exists only to give the push a human-readable handle.
 
-The dev role's `PowerUserAccess` already covers `ecr:*`, so no IAM change is needed for CI to push. Local development uses the same role via the `local` profile, so a developer can run `make registry-apply ENV=local && docker push …` to iterate.
+The staging role's `PowerUserAccess` already covers `ecr:*`, so no IAM change is needed for CI to push. Local development uses the same role via the `local` profile, so a developer can run `make registry-apply ENV=local && docker push …` to iterate.
 
 ### `make` targets
 
@@ -198,7 +198,7 @@ registry-apply    ## Apply the registry stack for ENV
 registry-destroy  ## Destroy the registry stack for ENV (requires explicit ENV; refuses prod unless I_KNOW=1)
 ```
 
-`make destroy` for the service stack does not touch the registry. `registry-destroy` is a separate, explicit target — carrying the same guards as `destroy` (explicit `ENV` required, prod blocked unless `I_KNOW=1`, backend-mismatch check) so the raw `terraform -chdir=infra/registry destroy` command, which bypasses those guards, is never the intended path.
+`make destroy` for the service stack does not touch the registry. `registry-destroy` is a separate, explicit target—carrying the same guards as `destroy` (explicit `ENV` required, prod blocked unless `I_KNOW=1`, backend-mismatch check) so the raw `terraform -chdir=infra/registry destroy` command, which bypasses those guards, is never the intended path.
 
 ### Module responsibilities
 
@@ -233,11 +233,11 @@ Neutral:
 
 ## Alternatives considered
 
-- **Module in the main service stack with targeted bootstrap apply.** Rejected — coupling a build-time durable to deploy-time state means every service plan re-evaluates the repository, and the targeted-apply step is a recurring papercut for new environments and new contributors.
-- **Terraform-driven Docker push of a placeholder image.** Rejected — places Docker on every Terraform runner, makes plans opaque, and trades a one-time setup quirk for permanent operational complexity.
-- **Tag-based image pinning instead of digest.** Rejected — strictly weaker than digest pinning and requires `IMMUTABLE` repository policy as a load-bearing safety check rather than a defense-in-depth one.
-- **Mutable `${env}-latest` tag with Lambda update on every push.** Rejected — incompatible with `IMMUTABLE`, loses replay determinism, and conflates "the image we pushed" with "the image deployed."
-- **Enhanced scanning via Inspector.** Deferred — the right answer at production scale, but its account-wide configuration model does not fit a per-env registry stack and the per-image cost is disproportionate for portfolio scale. Re-evaluate when this project moves beyond portfolio status.
-- **CMK encryption on the repository.** Deferred — same reasoning as ADR-0004 and ADR-0007. Re-evaluate before real PII enters the build pipeline (e.g. fixtures, baked-in test data).
-- **One shared registry across environments, scoped by tag.** Rejected — breaks the `Environment` tag-deny IAM guard and conflates blast radii. A bad image in dev should be unable to land in prod by construction, not by tag hygiene.
+- **Module in the main service stack with targeted bootstrap apply.** Rejected—coupling a build-time durable to deploy-time state means every service plan re-evaluates the repository, and the targeted-apply step is a recurring papercut for new environments and new contributors.
+- **Terraform-driven Docker push of a placeholder image.** Rejected—places Docker on every Terraform runner, makes plans opaque, and trades a one-time setup quirk for permanent operational complexity.
+- **Tag-based image pinning instead of digest.** Rejected—strictly weaker than digest pinning and requires `IMMUTABLE` repository policy as a load-bearing safety check rather than a defense-in-depth one.
+- **Mutable `${env}-latest` tag with Lambda update on every push.** Rejected—incompatible with `IMMUTABLE`, loses replay determinism, and conflates "the image we pushed" with "the image deployed."
+- **Enhanced scanning via Inspector.** Deferred—the right answer at production scale, but its account-wide configuration model does not fit a per-env registry stack and the per-image cost is disproportionate for portfolio scale. Re-evaluate when this project moves beyond portfolio status.
+- **CMK encryption on the repository.** Deferred—same reasoning as ADR-0004 and ADR-0007. Re-evaluate before real PII enters the build pipeline (e.g. fixtures, baked-in test data).
+- **One shared registry across environments, scoped by tag.** Rejected—breaks the `Environment` tag-deny IAM guard and conflates blast radii. A bad image in staging should be unable to land in prod by construction, not by tag hygiene.
 - **No lifecycle policy.** Rejected for symmetry with the storage module's expiration rule and the queue's bounded retention; unbounded ECR growth has no upside.

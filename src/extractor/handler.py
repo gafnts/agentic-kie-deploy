@@ -10,14 +10,13 @@ getters so the module is importable without AWS credentials or env config.
 
 from __future__ import annotations
 
-import contextlib
 import datetime
 import json
 import os
 import re
 import time
 from functools import cache
-from typing import Any
+from typing import Any, cast
 
 import boto3
 from agentic_kie import PDFLoader, SinglePassExtractor
@@ -54,15 +53,20 @@ def _table() -> Any:
     return boto3.resource("dynamodb").Table(os.environ["RESULTS_TABLE_NAME"])
 
 
-def _fetch_secret(arn: str) -> Any:
+def _fetch_secret(arn: str) -> str:
     """Retrieve a secret string from AWS Secrets Manager by ARN."""
-    return _secrets_client().get_secret_value(SecretId=arn)["SecretString"]
+    return cast(str, _secrets_client().get_secret_value(SecretId=arn)["SecretString"])
+
+
+@cache
+def _llm_api_key() -> str:
+    """Fetch the LLM provider API key once; kept out of os.environ to avoid printenv exposure."""
+    return _fetch_secret(os.environ["LLM_PROVIDER_SECRET_ARN"])
 
 
 @cache
 def _bootstrap_secrets() -> None:
-    """Hydrate provider SDK env vars from Secrets Manager. Runs once per execution environment."""
-    os.environ["GOOGLE_API_KEY"] = _fetch_secret(os.environ["LLM_PROVIDER_SECRET_ARN"])
+    """Hydrate LangSmith SDK env vars from Secrets Manager. Runs once per execution environment."""
     os.environ["LANGSMITH_API_KEY"] = _fetch_secret(os.environ["LANGSMITH_SECRET_ARN"])
     os.environ["LANGSMITH_TRACING"] = "true"
 
@@ -71,7 +75,9 @@ def _bootstrap_secrets() -> None:
 def _extractor() -> SinglePassExtractor[NDA]:
     """Build the key information extractor."""
     _bootstrap_secrets()
-    model = ChatGoogleGenerativeAI(model=os.environ["LLM_MODEL"])
+    model = ChatGoogleGenerativeAI(
+        model=os.environ["LLM_MODEL"], google_api_key=_llm_api_key()
+    )
     return SinglePassExtractor(model=model, schema=NDA)
 
 
@@ -109,9 +115,9 @@ def extract(bucket: str, key: str, document_id: str) -> dict[str, Any]:
     data = _s3_client().get_object(Bucket=bucket, Key=key)["Body"].read()
     document = PDFLoader().load_bytes(data, name=key)
 
-    time_zero = time.perf_counter()
+    start = time.perf_counter()
     result = _extractor().extract(document)
-    processing_ms = round((time.perf_counter() - time_zero) * 1000)
+    processing_ms = round((time.perf_counter() - start) * 1000)
 
     return {
         "extracted_fields": result.value.model_dump(),
@@ -281,8 +287,20 @@ def process_record(record: dict[str, Any]) -> str | None:
         return None
     except Exception as exc:
         logger.exception("extraction failed for %s", document_id)
-        with contextlib.suppress(ClientError):
-            fail(document_id, type(exc).__name__, str(exc))
+        max_receive_count = int(os.environ.get("SQS_MAX_RECEIVE_COUNT", "3"))
+        if attempt >= max_receive_count:
+            try:
+                fail(document_id, type(exc).__name__, str(exc))
+            except ClientError as fail_exc:
+                if (
+                    fail_exc.response.get("Error", {}).get("Code")
+                    != "ConditionalCheckFailedException"
+                ):
+                    logger.warning(
+                        "failed to write terminal status for %s: %s",
+                        document_id,
+                        fail_exc,
+                    )
         log(
             "failed",
             reason="extract_error",
@@ -309,4 +327,4 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
         try:
             _ls_client().flush()
         except Exception:
-            logger.exception("langsmith flush failed")
+            logger.exception("LangSmith flush failed")

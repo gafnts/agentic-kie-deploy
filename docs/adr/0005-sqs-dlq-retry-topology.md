@@ -10,9 +10,9 @@ ADR-0001 fixed the eventing topology: S3 emits `Object Created` to EventBridge, 
 
 Three operational parameters drive the queue's behavior under failure:
 
-- **Queue type** — Standard vs FIFO. FIFO buys per-group ordering and exactly-once processing at the cost of a 300 msg/s baseline (3,000 with batching) and per-message-group overhead.
-- **Visibility timeout** — the window during which a message is hidden from other consumers after delivery. Must exceed the worst-case extractor execution time, or in-flight work will be redelivered while still running, multiplying LLM cost and risking duplicate writes.
-- **`maxReceiveCount` on the redrive policy** — how many delivery attempts before a message is shunted to the DLQ. Too low and transient LLM/provider failures land in the DLQ permanently; too high and a poison-pill document burns retries (and dollars) before isolation.
+- **Queue type**—Standard vs FIFO. FIFO buys per-group ordering and exactly-once processing at the cost of a 300 msg/s baseline (3,000 with batching) and per-message-group overhead.
+- **Visibility timeout**—the window during which a message is hidden from other consumers after delivery. Must exceed the worst-case extractor execution time, or in-flight work will be redelivered while still running, multiplying LLM cost and risking duplicate writes.
+- **`maxReceiveCount` on the redrive policy**—how many delivery attempts before a message is shunted to the DLQ. Too low and transient LLM/provider failures land in the DLQ permanently; too high and a poison-pill document burns retries (and dollars) before isolation.
 
 The extractor is a container Lambda running `agentic-kie`. The benchmark referenced in ADR-0001 puts the winning configuration (Gemini Standard, single-pass) at ~10s end-to-end, but real-world tail latency from the LLM provider is unbounded in principle. Documents are independent: there is no per-document ordering requirement, and idempotency is enforced downstream by the extractor's DynamoDB write being keyed on `doc_id` (to be defined in a later ADR alongside the table module).
 
@@ -37,11 +37,13 @@ The queue module takes `lambda_timeout_seconds` as an input variable and compute
 
 Two further hardening decisions, applied to both queues:
 
-- **Resource policy with `aws:SourceArn` condition.** The queue policy grants `sqs:SendMessage` to `events.amazonaws.com`, scoped to the EventBridge rule's ARN. Without this scoping the rule attaches successfully but messages silently fail to land — a footgun worth recording as an explicit decision rather than a code-only convention.
+- **Resource policy with `aws:SourceArn` condition.** The queue policy grants `sqs:SendMessage` to `events.amazonaws.com`, scoped to the EventBridge rule's ARN. Without this scoping the rule attaches successfully but messages silently fail to land—a footgun worth recording as an explicit decision rather than a code-only convention.
 - **`DenyInsecureTransport`.** Both the main queue and the DLQ deny any `sqs:*` action over non-TLS connections, mirroring the bucket policy from ADR-0003 so the transport-layer posture is uniform across the pipeline.
 
+The EventBridge rule's event pattern additionally filters on `object.key` prefix `uploads/`, so only objects under that prefix trigger the queue. The bucket today only ever receives client uploads under that prefix, so the filter is defense-in-depth rather than load-bearing today—but it pins the upload contract at the routing layer, so if a future module ever writes sibling artifacts to the same bucket (e.g. cached OCR text next to the source document), those writes cannot accidentally fan out into LLM invocations without an explicit rule change.
+
 > [!NOTE]
-> A note on what "Standard throughput" buys and does not buy: SQS Standard imposes no practical TPS ceiling on the queue itself, so the queue will not be the bottleneck during an ingestion burst. Parallelism on the consumer side is governed by the **Lambda event source mapping** — concurrent invocations scale up to 300 per minute against backlog, and each invocation processes a batch of messages. This means the cost-bounding lever for "how many LLM calls run in parallel" lives on the event source mapping (`maximum_concurrency`, `batch_size`), not on the queue. That decision belongs to the extractor module's ADR; this ADR records only that the queue intentionally does not constrain it.
+> A note on what "Standard throughput" buys and does not buy: SQS Standard imposes no practical TPS ceiling on the queue itself, so the queue will not be the bottleneck during an ingestion burst. Parallelism on the consumer side is governed by the **Lambda event source mapping**—concurrent invocations scale up to 300 per minute against backlog, and each invocation processes a batch of messages. This means the cost-bounding lever for "how many LLM calls run in parallel" lives on the event source mapping (`maximum_concurrency`, `batch_size`), not on the queue. That decision belongs to the extractor module's ADR; this ADR records only that the queue intentionally does not constrain it.
 
 [^1]: AWS recommends setting visibility timeout to at least six times the consumer's processing time (see *Amazon SQS visibility timeout* documentation).
 
@@ -57,17 +59,17 @@ Positive:
 Negative:
 - Standard SQS allows occasional duplicate delivery; the extractor must remain idempotent at the `doc_id` level (to be enforced by the DynamoDB write in a later ADR)
 - `maxReceiveCount = 3` is a guess for the transient-vs-permanent failure boundary; if real traffic shows transient LLM failures clustering above 3, the value will need tuning
-- Manual DLQ redrive means a human is in the loop for any persistent failure — acceptable at portfolio scale, would need automation under real traffic
+- Manual DLQ redrive means a human is in the loop for any persistent failure—acceptable at portfolio scale, would need automation under real traffic
 - Because the queue does not constrain consumer parallelism, an unbounded ingestion burst translates directly into unbounded parallel LLM invocations and cost. The extractor module must set `maximum_concurrency` on its event source mapping to bound this; without it, a single 10,000-document upload would spin up Lambdas as fast as the 300/min scaling rate allows and bill the corresponding LLM calls in parallel
 
 Neutral:
 - Switching to SSE-KMS later mirrors the ADR-0004 migration and would happen at the same boundary (real data arriving)
-- Queue depth and DLQ-occupancy CloudWatch alarms (`ApproximateAgeOfOldestMessage` on the main queue, `ApproximateNumberOfMessagesVisible > 0` on the DLQ) are deferred to a later observability ADR; their omission is intentional, not an oversight
+- The DLQ-occupancy alarm (`ApproximateNumberOfMessagesVisible > 0`) was closed in ADR-0009's "Observability alarms" section together with the Lambda-side alarms; the main-queue `ApproximateAgeOfOldestMessage` alarm remains deferred—it overlaps the DLQ signal at this scale, and the absence is intentional, not an oversight
 - The EventBridge target has no explicit retry policy or rule-level DLQ; the AWS defaults (24h retry window, 185 attempts) are sufficient for the S3 → SQS hop and overriding them is intentionally deferred
 
 ## Alternatives considered
 
-- **FIFO queue**: rejected — buys ordering and exactly-once semantics that this workload does not need, at the cost of a hard throughput ceiling and per-message-group overhead. Documents are independent.
-- **No DLQ, infinite retry**: rejected — a single malformed document would loop forever, accumulating LLM cost on every retry. The DLQ is the cost-bound on failure.
-- **`maxReceiveCount = 1` (no retry)**: rejected — every transient provider hiccup becomes a DLQ entry requiring manual redrive, inverting the operator/cost tradeoff.
-- **Direct `visibility_timeout_seconds` input** (not derived from the Lambda timeout): rejected — exposes the same number in two modules and invites drift the first time the Lambda timeout is changed without updating the queue.
+- **FIFO queue**: rejected—buys ordering and exactly-once semantics that this workload does not need, at the cost of a hard throughput ceiling and per-message-group overhead. Documents are independent.
+- **No DLQ, infinite retry**: rejected—a single malformed document would loop forever, accumulating LLM cost on every retry. The DLQ is the cost-bound on failure.
+- **`maxReceiveCount = 1` (no retry)**: rejected—every transient provider hiccup becomes a DLQ entry requiring manual redrive, inverting the operator/cost tradeoff.
+- **Direct `visibility_timeout_seconds` input** (not derived from the Lambda timeout): rejected—exposes the same number in two modules and invites drift the first time the Lambda timeout is changed without updating the queue.

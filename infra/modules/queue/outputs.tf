@@ -25,3 +25,7 @@ output "dlq_name" {
 output "dlq_alarm_arn" {
   value = aws_cloudwatch_metric_alarm.dlq_messages_visible.arn
 }
+
+output "max_receive_count" {
+  value = var.max_receive_count
+}
