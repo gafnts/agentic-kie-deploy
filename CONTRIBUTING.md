@@ -70,7 +70,7 @@ flowchart LR
 ```
 
 > [!NOTE]
-> The staging and prod apply jobs are not symmetric. Staging runs `terraform apply` directly against current state at merge time — the PR plan is informational, not the artifact applied. This is intentional: staging is the iteration environment, and the simplification is a reasonable trade-off. Prod is plan-bound: a new plan is generated post-merge, saved as an artifact, and that exact artifact is what gets applied after approval.
+> The staging and prod apply jobs are not symmetric. Staging runs `terraform apply` directly against current state at merge time—the PR plan is informational, not the artifact applied. This is intentional: staging is the iteration environment, and the simplification is a reasonable trade-off. Prod is plan-bound: a new plan is generated post-merge, saved as an artifact, and that exact artifact is what gets applied after approval.
 
 ## First-time setup
 
@@ -94,7 +94,7 @@ Hooks fire automatically on every git operation:
 The split keeps commits fast (sub-second feedback for the common loop) and reserves the slower scanners and validators for push time, before changes are shared.
 
 > [!IMPORTANT]
-> If not already installed in your system, install the following tools first — each links to installation instructions:
+> If not already installed in your system, install the following tools first—each links to installation instructions:
 > - [trivy](https://github.com/aquasecurity/trivy)
 > - [tflint](https://github.com/terraform-linters/tflint#installation)
 > - [gitleaks](https://github.com/gitleaks/gitleaks#installing)
@@ -120,7 +120,7 @@ The three deploy roles (`local`, `staging`, `prod`) live in a separate Terraform
 make iam-init && make iam-apply
 ```
 
-The output gives you three role ARNs. Keep them — you'll paste two into GitHub and one into your AWS config.
+The output gives you three role ARNs. Keep them—you'll paste two into GitHub and one into your AWS config.
 
 ### Create the ECR repository
 
@@ -170,7 +170,7 @@ aws secretsmanager create-secret \
   --secret-string '<your-langsmith-key>'
 ```
 
-Terraform discovers the secrets by name at plan time — no ARNs to copy or paste.
+Terraform discovers the secrets by name at plan time—no ARNs to copy or paste.
 
 > [!IMPORTANT]
 > Terraform manages the IAM grants on these secrets but **not** their values. Rotating a key is `aws secretsmanager update-secret` against the existing secret; the Lambda picks the new value up on the next cold start (warm invocations within a ~15-minute execution-environment lifetime continue to see the old value, by design).
@@ -239,7 +239,7 @@ make destroy ENV=local   # Tear down all local resources
 > `make build-extractor` accepts any `ENV`, but outside `local` that use case is owned by CI. Only reach for it manually for other environments when troubleshooting.
 
 > [!IMPORTANT]
-> `make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1` — only CI is allowed to set that. `make destroy` only tears down the service stack; the ECR repository in `infra/registry/` has its own lifecycle and a separate `make registry-destroy ENV=<env>` command (same guards apply — prefer it over invoking `terraform destroy` directly inside `infra/registry/`).
+> `make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1`—only CI is allowed to set that. `make destroy` only tears down the service stack; the ECR repository in `infra/registry/` has its own lifecycle and a separate `make registry-destroy ENV=<env>` command (same guards apply—prefer it over invoking `terraform destroy` directly inside `infra/registry/`).
 
 ### Manual smoke test
 
@@ -300,7 +300,7 @@ git push -u origin feature/my-change
 
 CI runs the staging workflow. Within a minute the PR gets a sticky comment titled **"Terraform Plan · `staging`"** showing what would be applied. Review the plan as part of code review.
 
-Merge the PR. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first — it builds the container image, pushes it to the staging ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Service-only changes (Terraform tweaks, IAM tightening) skip the Docker work and re-apply with the previously-deployed digest. Either way, CI applies the changes to staging automatically, then runs `make smoke` as a post-apply check; a smoke failure fails the workflow. Smoke covers two paths: the queue path (S3 → EventBridge → SQS) and the full extraction path (S3 → Lambda → DynamoDB), verifying that an uploaded PDF reaches a `succeeded` status in the results table.
+Merge the PR. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first—it builds the container image, pushes it to the staging ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Service-only changes (Terraform tweaks, IAM tightening) skip the Docker work and re-apply with the previously-deployed digest. Either way, CI applies the changes to staging automatically, then runs `make smoke` as a post-apply check; a smoke failure fails the workflow. Smoke uploads a PDF to S3 and verifies the full extraction path (S3 → EventBridge → SQS → Lambda → DynamoDB) by polling for a `succeeded` status in the results table.
 
 ### Promoting to prod
 
@@ -321,7 +321,7 @@ If the plan looks wrong at the approval gate, reject it. Nothing is applied.
 
 ### Adding new infrastructure
 
-Most changes are app-level — new modules in `infra/modules/`, wired into `infra/main.tf`. The IAM roles already have `PowerUserAccess`, so they cover almost any AWS service you'd add. The deploy flow is unchanged.
+Most changes are app-level—new modules in `infra/modules/`, wired into `infra/main.tf`. The IAM roles already have `PowerUserAccess`, so they cover almost any AWS service you'd add. The deploy flow is unchanged.
 
 After adding a new Terraform module or bumping a provider version, regenerate the lock files so CI (linux/amd64) has the right platform hashes:
 
@@ -341,44 +341,13 @@ You only need to touch `infra/iam/` when:
 
 ### Make targets
 
-| Target | Description |
-|---|---|
-| `make install` | Sync deps, install pre-commit hooks (both stages), install tflint plugins |
-| `make tflint-init` | Refresh tflint plugins after a `.tflint.hcl` version bump |
-| `make lock` | Regenerate `.terraform.lock.hcl` for all platforms (run after adding a module or bumping a provider) |
-| `make check` | Run every pre-commit hook against every file (both stages) |
-| `make lint` | Run ruff check on `src` |
-| `make format` | Apply ruff lint fixes and formatting to `src` |
-| `make type` | Run mypy on `src` |
-| `make test` | Run pytest with coverage |
-| `make smoke` | Run integration smoke tests against the deployed `ENV`: verifies the queue path (S3 → EventBridge → SQS) and the full extraction path (S3 → Lambda → DynamoDB). Requires Terraform outputs to be available (backend initialized for that env). |
-| `make tf-format` | Format all Terraform files |
-| `make bootstrap` | Create state bucket and write backend files (one-time, run once) |
-| `make backend` | Regenerate backend files only, no AWS calls (used by CI and after fresh clone) |
-| `make provision` | One-shot local bootstrap: chains `iam-init`/`iam-apply`, `registry-init`/`registry-apply`, and `init` for `ENV=local` |
-| `make iam-init` | Initialize Terraform backend for the IAM bootstrap module |
-| `make iam-plan` | Preview changes to the IAM bootstrap module |
-| `make iam-apply` | Apply the IAM bootstrap module (creates deploy roles) |
-| `make iam-destroy` | Destroy the IAM bootstrap module (refuses prod unless `I_KNOW=1`) |
-| `make registry-init` | Initialize Terraform backend for the registry stack for `ENV` |
-| `make registry-plan` | Preview changes to the registry stack for `ENV` |
-| `make registry-apply` | Apply the registry stack for `ENV` (creates the extractor ECR repository) |
-| `make registry-destroy` | Destroy the registry stack for `ENV` (requires explicit `ENV`; refuses prod unless `I_KNOW=1`) |
-| `make build-extractor` | Build and push the extractor image to ECR for `ENV`; prints the resulting digest (used to set `TF_VAR_extractor_image_digest`) |
-| `make init` | Initialize Terraform backend for `ENV` |
-| `make plan` | Preview infrastructure changes for `ENV` |
-| `make ci-plan` | Preview changes and save plan to `tfplan.<env>` (used by CI) |
-| `make apply` | Apply infrastructure changes for `ENV` (refuses prod unless `I_KNOW=1`) |
-| `make ci-apply` | Apply saved plan `tfplan.<env>` (used by CI for prod) |
-| `make destroy` | Destroy all infrastructure for `ENV` (requires explicit `ENV`; refuses prod unless `I_KNOW=1`) |
-
-`ENV` defaults to `local`. Override with `make plan ENV=staging`, etc.
+Run `make help` for the full list of targets with descriptions, grouped by section. `ENV` defaults to `local`; override with `make plan ENV=staging`, etc.
 
 ### Files that are gitignored
 
-- `.terraform/` — Terraform plugin cache and local state
-- `infra/tfplan.*` — Saved plan binaries
-- `infra/iam/iam.tfvars` — Contains your principal ARN
+- `.terraform/`—Terraform plugin cache and local state
+- `infra/tfplan.*`—Saved plan binaries
+- `infra/iam/iam.tfvars`—Contains your principal ARN
 
 ### Design notes
 

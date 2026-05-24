@@ -6,7 +6,7 @@ Accepted (2026-05-01)
 
 ## Context
 
-ADR-0001 established a fully asynchronous pipeline. The extractor Lambda writes structured results to DynamoDB but does not deliver them back to the client. In an SQS-triggered Lambda, the return value is invisible to the caller — SQS only inspects it for ack/nack purposes — so returning results requires an explicit delivery mechanism added on top of the existing pipeline.
+ADR-0001 established a fully asynchronous pipeline. The extractor Lambda writes structured results to DynamoDB but does not deliver them back to the client. In an SQS-triggered Lambda, the return value is invisible to the caller—SQS only inspects it for ack/nack purposes—so returning results requires an explicit delivery mechanism added on top of the existing pipeline.
 
 Three options are available:
 
@@ -22,7 +22,7 @@ The current scope covers the ingestion and extraction path. No client has been i
 
 Defer the polling endpoint. DynamoDB remains the sole result sink for now.
 
-When the endpoint is built, it will be a `GET /results/{doc_id}` route on the existing API Gateway, backed by a new reader Lambda that reads directly from DynamoDB. The prerequisite is that `doc_id` is predictable and surfaced to the client at upload time — derived from the S3 object key so the client has something to poll with before any extraction has completed.
+When the endpoint is built, it will be a `GET /results/{doc_id}` route on the existing API Gateway, backed by a new reader Lambda that reads directly from DynamoDB. The prerequisite is that `doc_id` is predictable and surfaced to the client at upload time—derived from the S3 object key so the client has something to poll with before any extraction has completed.
 
 ## Consequences
 
@@ -40,5 +40,5 @@ Neutral:
 
 ## Alternatives considered
 
-- **Webhook / callback URL**: deferred — clean for server-to-server use cases, but requires every client to expose a reachable HTTPS endpoint, which is a strong assumption for the initial integration.
-- **WebSocket via API Gateway**: deferred — real-time delivery is appealing but the operational overhead (connection registry table, API Gateway Management API permissions, connection lifecycle management) is disproportionate to the current scope.
+- **Webhook / callback URL**: deferred—clean for server-to-server use cases, but requires every client to expose a reachable HTTPS endpoint, which is a strong assumption for the initial integration.
+- **WebSocket via API Gateway**: deferred—real-time delivery is appealing but the operational overhead (connection registry table, API Gateway Management API permissions, connection lifecycle management) is disproportionate to the current scope.

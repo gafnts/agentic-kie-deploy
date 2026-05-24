@@ -20,7 +20,6 @@
   - [Queue](#queue)
   - [Table](#table)
   - [Extractor](#extractor)
-  - [Alarms](#alarms)
 - [Observability](#observability)
 - [Contributing](#contributing)
 - [Architecture decisions](docs/adr/README.md)
@@ -72,12 +71,20 @@ EventBridge notifications are enabled on the bucket so object-creation events fl
 
 CORS is configured to allow `PUT` requests from the origins listed in `allowed_upload_origins`, which is the only method clients need to deposit documents.
 
+Three operational settings sit alongside the hardening layers—they aren't part of the access-control posture, but the bucket needs them to be operationally sound rather than just locked down:
+
+| Setting | Mechanism | What it gives us |
+|---|---|---|
+| Versioning | `Enabled` on the ingestion bucket | Recovery from accidental overwrite or delete; non-current versions are expired by the lifecycle rule below |
+| Server-access logging | Sibling `${bucket}-logs` bucket (PAB enabled, AES256, 90-day expiry on logs) | Request-level audit trail of every operation on the ingestion bucket, independent of CloudTrail data events |
+| Lifecycle / tiering | `STANDARD_IA` at 30d, `GLACIER_IR` at 90d, expire at 365d; noncurrent versions expire at 30d; incomplete multipart uploads abort at 7d | Bounds steady-state storage cost without manual cleanup; cold-tier transitions match the access pattern (documents are read once at extraction, rarely after) |
+
 > [!NOTE]
 > The bucket currently uses SSE-S3 (AES256). For workloads ingesting PII or regulated documents, SSE-KMS with a customer-managed key and S3 Bucket Keys enabled provides a second permission gate (`kms:Decrypt` in addition to `s3:GetObject`) and full CloudTrail auditability on every decrypt.
 
 ### Queue
 
-The extraction queue sits between the ingestion bucket and the extractor Lambda. An EventBridge rule scoped to the bucket forwards `Object Created` events to a Standard SQS queue, which triggers the extractor. Failed messages are moved to a dead-letter queue after a bounded number of retries so a single poison-pill document cannot burn LLM cost indefinitely.
+The extraction queue sits between the ingestion bucket and the extractor Lambda. An EventBridge rule scoped to the bucket and the `uploads/` key prefix forwards `Object Created` events to a Standard SQS queue, which triggers the extractor. Failed messages are moved to a dead-letter queue after a bounded number of retries so a single poison-pill document cannot burn LLM cost indefinitely.
 
 | Lever | Value | What it controls |
 |---|---|---|
@@ -86,6 +93,7 @@ The extraction queue sits between the ingestion bucket and the extractor Lambda.
 | Long polling | `receive_wait_time_seconds = 20` | Reduces empty receives and smooths Lambda triggering at no extra cost |
 | TLS-only policy | Deny on `aws:SecureTransport = false` (main + DLQ) | Mirrors the bucket's transport posture across the pipeline |
 | Source-scoped send | `aws:SourceArn` condition on `events.amazonaws.com` | Closes the confused-deputy class of misconfigurations on the EventBridge → SQS hop |
+| Key-prefix filter | EventBridge pattern matches `object.key` prefix `uploads/` | Defense-in-depth: any future sibling prefix in the ingestion bucket (e.g. cached OCR text written next to a source document) cannot fan out into LLM invocations without an explicit rule change |
 | Encryption | SSE-SQS (AWS-managed, main + DLQ) | Protects messages at rest without the operational cost of KMS |
 
 The queue does not constrain consumer parallelism; bounding the number of concurrent LLM invocations is the extractor module's job (`maximum_concurrency` on the event source mapping).
@@ -127,22 +135,12 @@ The extractor is a container-image Lambda that consumes the extraction queue, ru
 | Idempotency | Conditional `PutItem` + status-guarded `UpdateItem` | At-least-once SQS delivery cannot clobber a terminal row; redelivered terminal messages are a no-op |
 | Cold-start | No provisioned concurrency | Async polling model hides the 3–10s container-image cold start from the user |
 | Networking | No VPC | Talks only to AWS APIs and external HTTPS endpoints; no NAT cost, no ENI cold-start penalty |
-| Logs | 14d (staging/local), 30d (prod) | Operational telemetry only — LLM telemetry goes to LangSmith |
+| Logs | 14d (staging/local), 30d (prod) | Operational telemetry only—LLM telemetry goes to LangSmith |
 
 The Lambda holds no encryption story of its own: environment variables are encrypted with the AWS-managed Lambda key, parity with the rest of the data path. Secrets (LLM provider key, LangSmith key) live in Secrets Manager, one per environment, fetched once at cold start.
 
 > [!NOTE]
-> LLM telemetry ships to **LangSmith** (SaaS) at MVP — purpose-built UI, zero infrastructure cost at portfolio scale, OTel-GenAI-compatible migration path to a self-hosted Langfuse or Phoenix when real data lands. See ADR-0009's "Observability" section for the migration boundary.
-
-### Alarms
-
-The alarms module owns the alerting plane: one SNS topic per environment, plus an optional email subscription, that every CloudWatch alarm in the stack publishes to. Function-level and queue-level alarms live next to the resources they watch (extractor module, queue module) and reference this topic by ARN, so the alerting fan-out is one resource rather than one-per-alarm.
-
-| Lever | Value | What it controls |
-|---|---|---|
-| Topic encryption | SSE with AWS-managed KMS key (`alias/aws/sns`) | At-rest encryption for any message body the topic ever holds, parity with the rest of the data path |
-| Email subscription | Optional (`alarm_email` tfvar; null disables) | Local/dev runs without notifications; staging/prod set the address per environment. Subscriptions require manual confirmation from the recipient's inbox before delivery starts |
-| Topic policy | AWS default (account-only publish) | CloudWatch in the same account can publish without an explicit policy; no cross-account fan-out at this scope |
+> LLM telemetry ships to **LangSmith** (SaaS) at MVP—purpose-built UI, zero infrastructure cost at portfolio scale, OTel-GenAI-compatible migration path to a self-hosted Langfuse or Phoenix when real data lands. See ADR-0009's "Observability" section for the migration boundary.
 
 ---
 
@@ -155,28 +153,27 @@ The pipeline's observability splits cleanly into two backends, each scoped to wh
 | Operational telemetry | CloudWatch Logs + Alarms → SNS | Minute-to-hour, during incidents | Did the function run? Did it error? Is the DLQ filling up? Is concurrency throttling? |
 | LLM telemetry | LangSmith (SaaS) | Week-to-month, during prompt iteration | What did the model see? What did it say? Token usage, schema-validation outcomes, agent tool calls |
 
-The two share a `document_id` correlation key but otherwise have nothing in common; trying to serve both from a single backend compromises both. See [ADR-0009](docs/adr/0009-extractor-lambda.md)'s "Observability" section for the full reasoning, and the [LangSmith NOTE](#extractor) above for the data-residency tradeoff and migration path.
+The two share a `document_id` correlation key but otherwise have nothing in common; trying to serve both from a single backend compromises both. See [ADR-0009](docs/adr/0009-extractor-lambda.md)'s "Observability" section for the full reasoning.
 
 ### Alarms
 
-Three CloudWatch alarms cover the operational hot path. All three are 1-of-1 5-minute evaluations, treat missing data as `notBreaching` (idle infrastructure is not a failure), and publish to the alarms module's SNS topic on both alarm and OK transitions.
+The alarms module owns the alerting plane: one SNS topic per environment, plus an optional email subscription, that every CloudWatch alarm in the stack publishes to. Function-level and queue-level alarms live next to the resources they watch (extractor module, queue module) and reference this topic by ARN, so the alerting fan-out is one resource rather than one-per-alarm.
+
+| Lever | Value | What it controls |
+|---|---|---|
+| Topic encryption | SSE with AWS-managed KMS key (`alias/aws/sns`) | At-rest encryption for any message body the topic ever holds, parity with the rest of the data path |
+| Email subscription | Optional (`alarm_email` tfvar; null disables) | Local/dev runs without notifications; staging/prod set the address per environment. Subscriptions require manual confirmation from the recipient's inbox before delivery starts |
+| Topic policy | AWS default (account-only publish) | CloudWatch in the same account can publish without an explicit policy; no cross-account fan-out at this scope |
+
+Three CloudWatch alarms cover the operational hot path. All three are 1-of-1 5-minute evaluations, treat missing data as `notBreaching` (idle infrastructure is not a failure), and publish to the topic above on both alarm and OK transitions.
 
 | Alarm | Source | Fires when | Why it matters |
 |---|---|---|---|
-| `${function}-errors` | `AWS/Lambda` `Errors` (Sum) | `> 0` over 5 min | Any unhandled exception. With `maxReceiveCount = 3` on the queue, a single bad document fires this up to three times before it lands in the DLQ — the early-warning signal that the DLQ alarm is the confirmation of |
+| `${function}-errors` | `AWS/Lambda` `Errors` (Sum) | `> 0` over 5 min | Any unhandled exception. With `maxReceiveCount = 3` on the queue, a single bad document fires this up to three times before it lands in the DLQ—the early-warning signal that the DLQ alarm is the confirmation of |
 | `${function}-throttles` | `AWS/Lambda` `Throttles` (Sum) | `> 0` over 5 min | Invocations rejected because the function hit its `maximum_concurrency` cap. Throttles mean ingestion is exceeding the planned LLM fan-out budget; either the cap is wrong or there's a burst worth investigating |
 | `${dlq}-messages-visible` | `AWS/SQS` `ApproximateNumberOfMessagesVisible` (Max) on the DLQ | `> 0` over 5 min | A message in the DLQ means a document exhausted its three retries. The DLQ is the single source of truth for failed messages (ADR-0005); this alarm is the page on it |
 
-`IteratorAge` is intentionally not wired — it's a Kinesis/DDB Streams metric, not an SQS-Lambda one. `ConcurrentExecutions` is not wired either; it overlaps the Throttles signal at this scale.
-
-### Paging integration (deferred)
-
-The SNS topic accepts an email subscription today; routing to PagerDuty, Opsgenie, or a Slack webhook is deliberately out of scope. At portfolio scale there is no on-call rotation; email subscription is enough to demonstrate the wiring and exercise the alarm → notification path end-to-end. The migration is mechanical when it matters: swap `protocol = "email"` for an `https` subscription pointing at the upstream integration's webhook URL, or add a Lambda subscriber that transforms the SNS payload into the upstream's API shape. The alarms themselves do not change; only the topic's subscriptions do.
-
-> [!NOTE]
-> Email subscriptions require the recipient to confirm the SNS subscription from their inbox the first time the topic is created. `terraform apply` does not block on confirmation, and unconfirmed subscriptions stay in `PendingConfirmation` indefinitely without delivering — worth checking after the first deploy in a new environment.
-
----
+`IteratorAge` is intentionally not wired—it's a Kinesis/DDB Streams metric, not an SQS-Lambda one. `ConcurrentExecutions` is not wired either; it overlaps the Throttles signal at this scale.
 
 ## Contributing
 
