@@ -62,7 +62,6 @@ ini_options.filterwarnings = [
 [tool.coverage]
 run.branch = true
 run.omit = [
-  "src/agentic_kie/exceptions.py",
   "tests/*",
 ]
 run.source = [ "src" ]
