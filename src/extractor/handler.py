@@ -38,6 +38,15 @@ DOC_ID_RE = re.compile(
 )
 
 
+class ExtractionError(Exception):
+    """Sanitized error surfaced through ``@traceable``. CloudWatch retains the original cause."""
+
+
+def _redact_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Strip bucket/key from the LangSmith trace input; keep ``document_id`` as the correlation key."""
+    return {"document_id": inputs.get("document_id")}
+
+
 @cache
 def _secrets_client() -> Any:
     return boto3.client("secretsmanager")
@@ -104,15 +113,27 @@ def log(outcome: str, **fields: Any) -> None:
     logger.info({"handler_outcome": outcome, **fields})
 
 
-@traceable(name="extract_document")
+@traceable(name="extract_document", process_inputs=_redact_inputs)
 def extract(bucket: str, key: str, document_id: str) -> dict[str, Any]:
     """
     Download ``s3://bucket/key``, run single-pass NDA extraction, and return structured results.
 
     Return shape matches the optional attributes in the table schema (ADR-0007)
     so the conditional UPDATE in :func:`complete` works as-is.
+
+    ``ClientError`` from boto3 embeds account ID and resource ARNs in its message; it is
+    translated to ``ExtractionError`` so those identifiers do not leave the AWS account
+    via the LangSmith trace. The original cause is logged to CloudWatch.
     """
-    data = _s3_client().get_object(Bucket=bucket, Key=key)["Body"].read()
+    try:
+        data = _s3_client().get_object(Bucket=bucket, Key=key)["Body"].read()
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "ClientError")
+        logger.exception(
+            "aws error during extraction", extra={"document_id": document_id}
+        )
+        raise ExtractionError(f"aws:{code}") from None
+
     document = PDFLoader().load_bytes(data, name=key)
 
     start = time.perf_counter()
