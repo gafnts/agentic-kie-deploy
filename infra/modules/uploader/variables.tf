@@ -1,10 +1,5 @@
-variable "function_name" {
-  description = "Name of the presigner Lambda function. Also used as the prefix for the log group."
-  type        = string
-}
-
-variable "api_name" {
-  description = "Name of the API Gateway HTTP API. Also used as the prefix for the execution role so the role surfaces the module, not the function."
+variable "name" {
+  description = "Base name for the module's resources (Lambda function, HTTP API, execution role, log groups, alarms). All sub-resources are derived from this name with stable suffixes."
   type        = string
 }
 

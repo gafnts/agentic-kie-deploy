@@ -37,6 +37,12 @@ variable "extractor_image_digest" {
   }
 }
 
+variable "url_ttl_seconds" {
+  description = "Lifetime of the upload pre-signed URL the uploader module hands out. Tightening or loosening is a tfvar change per env with no other coordination (ADR-0010)."
+  type        = number
+  default     = 600
+}
+
 variable "alarm_email" {
   description = "Email address subscribed to the alarm SNS topic. Leave null to skip the subscription (alarms still fire in CloudWatch, they just don't notify anyone). The recipient must confirm the subscription from their inbox before delivery starts."
   type        = string

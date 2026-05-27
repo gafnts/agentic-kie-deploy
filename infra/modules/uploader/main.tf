@@ -11,7 +11,7 @@ data "archive_file" "presigner" {
 
 #trivy:ignore:AVD-AWS-0017
 resource "aws_cloudwatch_log_group" "presigner" {
-  name              = "/aws/lambda/${var.function_name}"
+  name              = "/aws/lambda/${var.name}"
   retention_in_days = var.log_retention_days
 
   tags = {
@@ -21,7 +21,7 @@ resource "aws_cloudwatch_log_group" "presigner" {
 
 #trivy:ignore:AVD-AWS-0017
 resource "aws_cloudwatch_log_group" "api_access" {
-  name              = "/aws/apigateway/${var.api_name}"
+  name              = "/aws/apigateway/${var.name}"
   retention_in_days = var.log_retention_days
 
   tags = {
@@ -43,7 +43,7 @@ data "aws_iam_policy_document" "assume_role" {
 }
 
 resource "aws_iam_role" "presigner" {
-  name               = "${var.api_name}-exec"
+  name               = "${var.name}-exec"
   assume_role_policy = data.aws_iam_policy_document.assume_role.json
 
   tags = {
@@ -83,7 +83,7 @@ resource "aws_iam_role_policy" "presigner" {
 
 #trivy:ignore:AVD-AWS-0066
 resource "aws_lambda_function" "presigner" {
-  function_name    = var.function_name
+  function_name    = var.name
   role             = aws_iam_role.presigner.arn
   runtime          = var.runtime
   handler          = "presigner.handler"
@@ -114,7 +114,7 @@ resource "aws_lambda_function" "presigner" {
 # is a first-class authorizer here — no custom Lambda authorizer required
 # (ADR-0010).
 resource "aws_apigatewayv2_api" "uploader" {
-  name          = var.api_name
+  name          = var.name
   protocol_type = "HTTP"
 
   tags = {
@@ -169,7 +169,7 @@ resource "aws_lambda_permission" "apigw_invoke" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "errors" {
-  alarm_name          = "${var.function_name}-errors"
+  alarm_name          = "${var.name}-errors"
   alarm_description   = "Presigner invocations that ended in an unhandled exception. The function does one generate_presigned_url call against the SDK — non-zero errors mean either an IAM regression or a malformed request that slipped past API Gateway."
   namespace           = "AWS/Lambda"
   metric_name         = "Errors"
@@ -194,7 +194,7 @@ resource "aws_cloudwatch_metric_alarm" "errors" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "throttles" {
-  alarm_name          = "${var.function_name}-throttles"
+  alarm_name          = "${var.name}-throttles"
   alarm_description   = "Presigner invocations rejected because Lambda hit the account concurrency cap. There is no reserved or maximum concurrency on this function (ADR-0010) — throttles imply the account ceiling is being approached."
   namespace           = "AWS/Lambda"
   metric_name         = "Throttles"

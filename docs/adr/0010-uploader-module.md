@@ -108,23 +108,24 @@ Removing the presigner means giving up server-controlled IDs, signature-pinned k
 
 ```hcl
 module "uploader" {
-  source               = "./modules/uploader"
-  function_name        = "${var.project_name}-${var.environment}-presigner"
-  api_name             = "${var.project_name}-${var.environment}-uploader"
-  ingestion_bucket_arn = module.bucket.bucket_arn
+  source                = "./modules/uploader"
+  name                  = "${var.project_name}-${var.environment}-uploader"
+  ingestion_bucket_arn  = module.bucket.bucket_arn
   ingestion_bucket_name = module.bucket.bucket_name
-  url_ttl_seconds      = 600
-  log_retention_days   = var.environment == "prod" ? 30 : 14
-  environment          = var.environment
-  alarm_topic_arn      = module.alarms.topic_arn
+  url_ttl_seconds       = var.url_ttl_seconds
+  log_retention_days    = var.environment == "prod" ? 30 : 14
+  environment           = var.environment
+  alarm_topic_arn       = module.alarms.topic_arn
 }
 ```
+
+A single `name` is the base for every resource the module owns (Lambda function, HTTP API, execution role, log groups, alarms), with stable suffixes derived inside the module. The Lambda function itself is conceptually the presigner, but it does not surface in the deployed name—the module's wire-up identity is `uploader` (matches the role-name pattern fixed above).
 
 Outputs: `api_endpoint`, `api_arn`, `route_arn`, `function_name`. The caller's IAM grant is constructed from `route_arn`.
 
 ### Observability
 
-Same posture as the extractor (ADR-0009): a module-owned log group at `/aws/lambda/${function_name}`, structured JSON logs, retention 14d in `local`/`staging`, 30d in `prod`. Function-level `Errors` and `Throttles` alarms on the same SNS topic as the rest of the pipeline (the `alarms` module). No LangSmith—there is no LLM call.
+Same posture as the extractor (ADR-0009): a module-owned log group at `/aws/lambda/${name}`, structured JSON logs, retention 14d in `local`/`staging`, 30d in `prod`. Function-level `Errors` and `Throttles` alarms on the same SNS topic as the rest of the pipeline (the `alarms` module). No LangSmith—there is no LLM call.
 
 CloudWatch logs include the resolved `document_id`, `client_principal` (from the API Gateway request context, which surfaces the caller's IAM principal), and `request_id` on every log line. The `client_principal` is the auditable record of who asked for which upload URL.
 
