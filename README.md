@@ -16,6 +16,7 @@
 
 - [Architecture](#architecture)
 - [Modules](#modules)
+  - [Uploader](#uploader)
   - [Bucket](#bucket)
   - [Queue](#queue)
   - [Table](#table)
@@ -55,13 +56,32 @@ The infrastructure is organized as small, per-concern Terraform modules wired to
 
 | Module | Path | Status |
 |---|---|---|
-| `uploader` | [infra/modules/uploader/](infra/modules/uploader/) | Planned |
+| `uploader` | [infra/modules/uploader/](infra/modules/uploader/) | Implemented |
 | `bucket` | [infra/modules/bucket/](infra/modules/bucket/) | Implemented |
 | `queue` | [infra/modules/queue/](infra/modules/queue/) | Implemented |
 | `extractor` | [infra/modules/extractor/](infra/modules/extractor/) | Implemented |
 | `table` | [infra/modules/table/](infra/modules/table/) | Implemented |
 | `results` | [infra/modules/results/](infra/modules/results/) | Planned |
 | `alarms` | [infra/modules/alarms/](infra/modules/alarms/) | Implemented |
+
+### Uploader
+
+The uploader is the pipeline's front door. An in-account caller signs `POST /uploads` with SigV4 against an API Gateway HTTP API authorized via `AWS_IAM`; the presigner Lambda mints a UUIDv7 `document_id`, composes the `uploads/{yyyy}/{mm}/{dd}/{document_id}` key (ADR-0006), and returns the ID alongside a short-lived pre-signed S3 PUT URL. The caller uploads directly to the ingestion bucket, bypassing API Gateway payload limits. See [ADR-0010](docs/adr/0010-uploader-module.md) for the full reasoning.
+
+| Lever | Value | What it controls |
+|---|---|---|
+| API flavor | API Gateway HTTP API | Cheaper per request and lower latency than REST API; the feature delta (no usage plans, no request validators) does not bite an internal AWS-native caller |
+| Authorizer | `AWS_IAM` on `POST /uploads` | Caller signs with the IAM role it already has—no API keys to rotate, no JWT issuer to operate—and the principal ARN lands in CloudTrail by default |
+| URL TTL | 600s (tfvar `url_ttl_seconds`, 60–3600 range) | Long enough for retries and slow networks; short enough that a leaked URL is useless within an hour |
+| Packaging | Python 3.13, zip | `boto3` + one signing call—the container-image cold-start tax (ADR-0008/0009) is unjustified here |
+| Timeout / memory | 5s / 256MB | One `generate_presigned_url` call; larger memory does not reduce wall-clock |
+| Architecture | `arm64` | Same cost reasoning as the extractor; the build is a zip on the right architecture |
+| Execution IAM | `s3:PutObject` scoped to `${ingestion_bucket}/uploads/*` | The signed URL inherits the role's grant, so the role must hold the action it grants. Prefix-scoped so a misuse cannot sign URLs for the analytics partition introduced by ADR-0012 |
+| Access logs | API Gateway → CloudWatch (JSON) | `requestId`, source IP, route, status, response length, latency on every request—available without instrumenting the Lambda |
+| Concurrency | No reserved or maximum | The presign call is cheap and API Gateway already rate-limits; there is no fan-out to bound (alarms cover throttles at the account ceiling) |
+
+> [!NOTE]
+> The route is open to any in-account principal holding `execute-api:Invoke` on the route ARN. The account boundary is the outer perimeter; the extractor's document-type coupling (ADR-0013) is the inner one. If a future environment cannot rely on the account boundary, the hardening lever is a Lambda authorizer that allowlists principal ARNs—see ADR-0010's alternatives section.
 
 ### Bucket
 
@@ -164,7 +184,7 @@ The two share a `document_id` correlation key but otherwise have nothing in comm
 
 ### Alarms
 
-The alarms module owns the alerting plane: one SNS topic per environment, plus an optional email subscription, that every CloudWatch alarm in the stack publishes to. Function-level and queue-level alarms live next to the resources they watch (extractor module, queue module) and reference this topic by ARN, so the alerting fan-out is one resource rather than one-per-alarm.
+The alarms module owns the alerting plane: one SNS topic per environment, plus an optional email subscription, that every CloudWatch alarm in the stack publishes to. Function-level and queue-level alarms live next to the resources they watch (uploader module, extractor module, queue module) and reference this topic by ARN, so the alerting fan-out is one resource rather than one-per-alarm.
 
 | Lever | Value | What it controls |
 |---|---|---|
@@ -172,12 +192,14 @@ The alarms module owns the alerting plane: one SNS topic per environment, plus a
 | Email subscription | Optional (`alarm_email` tfvar; null disables) | Local/dev runs without notifications; staging/prod set the address per environment. Subscriptions require manual confirmation from the recipient's inbox before delivery starts |
 | Topic policy | AWS default (account-only publish) | CloudWatch in the same account can publish without an explicit policy; no cross-account fan-out at this scope |
 
-Three CloudWatch alarms cover the operational hot path. All three are 1-of-1 5-minute evaluations, treat missing data as `notBreaching` (idle infrastructure is not a failure), and publish to the topic above on both alarm and OK transitions.
+Five CloudWatch alarms cover the operational hot path. Each is a 1-of-1 5-minute evaluation, treats missing data as `notBreaching` (idle infrastructure is not a failure), and publishes to the topic above on both alarm and OK transitions.
 
 | Alarm | Source | Fires when | Why it matters |
 |---|---|---|---|
-| `${function}-errors` | `AWS/Lambda` `Errors` (Sum) | `> 0` over 5 min | Any unhandled exception. With `maxReceiveCount = 3` on the queue, a single bad document fires this up to three times before it lands in the DLQ—the early-warning signal that the DLQ alarm is the confirmation of |
-| `${function}-throttles` | `AWS/Lambda` `Throttles` (Sum) | `> 0` over 5 min | Invocations rejected because the function hit its `maximum_concurrency` cap. Throttles mean ingestion is exceeding the planned LLM fan-out budget; either the cap is wrong or there's a burst worth investigating |
+| `${extractor}-errors` | `AWS/Lambda` `Errors` (Sum) on the extractor | `> 0` over 5 min | Any unhandled exception. With `maxReceiveCount = 3` on the queue, a single bad document fires this up to three times before it lands in the DLQ—the early-warning signal that the DLQ alarm is the confirmation of |
+| `${extractor}-throttles` | `AWS/Lambda` `Throttles` (Sum) on the extractor | `> 0` over 5 min | Invocations rejected because the function hit its `maximum_concurrency` cap. Throttles mean ingestion is exceeding the planned LLM fan-out budget; either the cap is wrong or there's a burst worth investigating |
+| `${presigner}-errors` | `AWS/Lambda` `Errors` (Sum) on the presigner | `> 0` over 5 min | The presigner does one `generate_presigned_url` call—non-zero errors imply an IAM regression or a malformed request that slipped past API Gateway |
+| `${presigner}-throttles` | `AWS/Lambda` `Throttles` (Sum) on the presigner | `> 0` over 5 min | The presigner has no reserved or maximum concurrency (ADR-0010); throttles imply the account concurrency ceiling is being approached |
 | `${dlq}-messages-visible` | `AWS/SQS` `ApproximateNumberOfMessagesVisible` (Max) on the DLQ | `> 0` over 5 min | A message in the DLQ means a document exhausted its three retries. The DLQ is the single source of truth for failed messages (ADR-0005); this alarm is the page on it |
 
 `IteratorAge` is intentionally not wired—it's a Kinesis/DDB Streams metric, not an SQS-Lambda one. `ConcurrentExecutions` is not wired either; it overlaps the Throttles signal at this scale.
