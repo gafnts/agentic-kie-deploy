@@ -24,6 +24,7 @@ from functools import cache
 from typing import Any, cast
 
 import boto3
+from botocore.config import Config
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -31,7 +32,9 @@ logger.setLevel(logging.INFO)
 
 @cache
 def _s3_client() -> Any:
-    return boto3.client("s3")
+    # SigV4 is required: the Lambda runs with STS credentials (ASIA...),
+    # and SigV2 does not bind the session token into the signature.
+    return boto3.client("s3", config=Config(signature_version="s3v4"))
 
 
 def uuid7() -> str:
