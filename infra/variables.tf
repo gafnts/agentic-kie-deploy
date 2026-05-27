@@ -25,7 +25,7 @@ variable "allowed_upload_origins" {
 variable "llm_model" {
   description = "LLM identifier for the extractor Lambda."
   type        = string
-  default     = "gemini-3.1-flash-lite-preview"
+  default     = "gemini-3.1-flash-lite"
 }
 
 variable "extractor_image_digest" {
