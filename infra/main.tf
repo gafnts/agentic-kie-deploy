@@ -43,6 +43,17 @@ module "bucket" {
   force_destroy          = var.environment != "prod"
 }
 
+module "uploader" {
+  source                = "./modules/uploader"
+  name                  = "${var.project_name}-${var.environment}-uploader"
+  ingestion_bucket_arn  = module.bucket.bucket_arn
+  ingestion_bucket_name = module.bucket.bucket_name
+  url_ttl_seconds       = var.url_ttl_seconds
+  log_retention_days    = var.environment == "prod" ? 30 : 14
+  environment           = var.environment
+  alarm_topic_arn       = module.alarms.topic_arn
+}
+
 module "queue" {
   source                 = "./modules/queue"
   name                   = "${var.project_name}-${var.environment}-extraction"

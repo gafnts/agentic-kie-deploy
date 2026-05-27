@@ -25,7 +25,7 @@ variable "allowed_upload_origins" {
 variable "llm_model" {
   description = "LLM identifier for the extractor Lambda."
   type        = string
-  default     = "gemini-3.1-flash-lite-preview"
+  default     = "gemini-3.1-flash-lite"
 }
 
 variable "extractor_image_digest" {
@@ -35,6 +35,12 @@ variable "extractor_image_digest" {
     condition     = can(regex("^sha256:[a-f0-9]{64}$", var.extractor_image_digest))
     error_message = "extractor_image_digest must be a sha256 digest, e.g. sha256:abc...123."
   }
+}
+
+variable "url_ttl_seconds" {
+  description = "Lifetime of the upload pre-signed URL the uploader module hands out. Tightening or loosening is a tfvar change per env with no other coordination (ADR-0010)."
+  type        = number
+  default     = 600
 }
 
 variable "alarm_email" {

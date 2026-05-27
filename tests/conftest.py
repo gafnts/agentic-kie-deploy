@@ -33,6 +33,16 @@ def results_table_name() -> str:
 
 
 @pytest.fixture(scope="session")
+def uploader_api_endpoint() -> str:
+    return _tf_output("uploader_api_endpoint")
+
+
+@pytest.fixture(scope="session")
+def boto_session() -> Any:
+    return boto3.Session()
+
+
+@pytest.fixture(scope="session")
 def s3() -> Any:
     return boto3.client("s3")
 

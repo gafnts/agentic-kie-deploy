@@ -210,5 +210,6 @@ __marimo__/
 .terraform/
 infra/tfplan.*
 infra/iam/iam.tfvars
+infra/modules/*/.build/
 
 .DS_Store

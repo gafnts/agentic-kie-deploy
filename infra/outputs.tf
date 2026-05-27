@@ -1,3 +1,16 @@
+output "uploader_api_endpoint" {
+  value = module.uploader.api_endpoint
+}
+
+output "uploader_route_arn" {
+  description = "Execution ARN of POST /uploads. The caller's IAM role attaches execute-api:Invoke on this ARN."
+  value       = module.uploader.route_arn
+}
+
+output "uploader_function_name" {
+  value = module.uploader.function_name
+}
+
 output "ingestion_bucket_name" {
   value = module.bucket.bucket_name
 }

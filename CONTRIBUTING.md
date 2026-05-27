@@ -175,6 +175,9 @@ Terraform discovers the secrets by name at plan time—no ARNs to copy or paste.
 > [!IMPORTANT]
 > Terraform manages the IAM grants on these secrets but **not** their values. Rotating a key is `aws secretsmanager update-secret` against the existing secret; the Lambda picks the new value up on the next cold start (warm invocations within a ~15-minute execution-environment lifetime continue to see the old value, by design).
 
+> [!NOTE]
+> The uploader module has no out-of-band setup. It is part of the service stack and picks up `url_ttl_seconds` and `allowed_upload_origins` from tfvars at apply time.
+
 ### Configure GitHub
 
 In the repo settings:
@@ -243,7 +246,9 @@ make destroy ENV=local   # Tear down all local resources
 
 ### Manual smoke test
 
-After applying infrastructure, you can verify the full extraction pipeline end-to-end using only the AWS CLI.
+After applying infrastructure, you can verify the pipeline end-to-end using only the AWS CLI. Two paths matter: the direct-S3 path exercises the extraction half (S3 → EventBridge → SQS → Lambda → DynamoDB), and the uploader-API path additionally exercises the front door (API Gateway → presigner → presigned PUT).
+
+**Direct-S3 path** (bypasses the uploader, useful for isolating the extraction half):
 
 ```bash
 # 1. Capture terraform outputs
@@ -266,8 +271,30 @@ aws dynamodb get-item \
   --consistent-read
 ```
 
+**Uploader-API path** (exercises the full surface, including SigV4 and the presigner):
+
+```bash
+# 1. Capture the uploader endpoint and downstream outputs
+API=$(terraform -chdir=infra output -raw uploader_api_endpoint)
+TABLE=$(terraform -chdir=infra output -raw results_table_name)
+
+# 2. Sign POST /uploads with SigV4 and capture the presigned PUT URL
+RESP=$(awscurl --service execute-api -X POST "$API/uploads")
+DOC_ID=$(echo "$RESP" | jq -r .document_id)
+UPLOAD_URL=$(echo "$RESP" | jq -r .upload_url)
+
+# 3. PUT the document to the returned URL (no signing—the URL is already signed)
+curl -X PUT --data-binary @tests/static/smoke_document.pdf "$UPLOAD_URL"
+
+# 4. Check DynamoDB for the result
+aws dynamodb get-item \
+  --table-name "$TABLE" \
+  --key "{\"document_id\":{\"S\":\"$DOC_ID\"}}" \
+  --consistent-read
+```
+
 > [!NOTE]
-> `make smoke` runs the same pipeline automatically via pytest (with a progress bar and a 180-second timeout). Use the manual steps above when you want to observe log output in real time or inspect the raw DynamoDB item.
+> `make smoke` runs both paths automatically via pytest (`TestExtractorSmoke` and `TestUploaderSmoke` in [tests/test_smoke.py](tests/test_smoke.py), each with a 180-second timeout). Use the manual steps above when you want to observe log output in real time or inspect the raw DynamoDB item.
 
 ### Quality gates
 
@@ -300,7 +327,7 @@ git push -u origin feature/my-change
 
 CI runs the staging workflow. Within a minute the PR gets a sticky comment titled **"Terraform Plan · `staging`"** showing what would be applied. Review the plan as part of code review.
 
-Merge the PR. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first—it builds the container image, pushes it to the staging ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Service-only changes (Terraform tweaks, IAM tightening) skip the Docker work and re-apply with the previously-deployed digest. Either way, CI applies the changes to staging automatically, then runs `make smoke` as a post-apply check; a smoke failure fails the workflow. Smoke uploads a PDF to S3 and verifies the full extraction path (S3 → EventBridge → SQS → Lambda → DynamoDB) by polling for a `succeeded` status in the results table.
+Merge the PR. The staging workflow triggers on changes under `infra/**`, `src/extractor/**`, or `src/uploader/**`. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first—it builds the container image, pushes it to the staging ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Changes under `src/uploader/**` or service-only Terraform tweaks skip the Docker work; the uploader is a zip Lambda repackaged by Terraform on every apply, and infra-only changes re-apply with the previously-deployed digest. Either way, CI applies the changes to staging automatically, then runs `make smoke` as a post-apply check; a smoke failure fails the workflow. Smoke exercises both entry points—`TestExtractorSmoke` uploads directly to S3, `TestUploaderSmoke` goes through the uploader API and a presigned PUT—and both poll for a `succeeded` status in the results table.
 
 ### Promoting to prod
 
@@ -308,7 +335,7 @@ Open a PR from `develop` to `main`. CI posts a sticky **"Terraform Plan · `prod
 
 After the merge:
 
-1. If anything under `src/extractor/**` changed, CI runs `build-and-push` (under the prod-plan role's scoped ECR push permission) to publish a new image and emit its digest. Service-only changes skip this step.
+1. The prod workflow triggers on changes under `infra/**`, `src/extractor/**`, or `src/uploader/**`. If anything under `src/extractor/**` changed, CI runs `build-and-push` (under the prod-plan role's scoped ECR push permission) to publish a new image and emit its digest. Uploader-only and infra-only changes skip this step.
 2. CI runs the `plan` job, generates a saved plan, uploads it as a workflow artifact.
 3. CI queues the `apply` job, which waits at the prod environment approval gate.
 4. You get notified.
