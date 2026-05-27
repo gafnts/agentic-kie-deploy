@@ -44,8 +44,10 @@ overrides = [
   { module = "tests.*", disallow_untyped_defs = false, disallow_any_expr = false, disable_error_code = [ "call-arg" ] },
   { module = "tqdm", ignore_missing_imports = true },
   { module = "boto3", ignore_missing_imports = true },
+  { module = "botocore.auth", ignore_missing_imports = true },
   { module = "botocore.config", ignore_missing_imports = true },
   { module = "botocore.exceptions", ignore_missing_imports = true },
+  { module = "botocore.awsrequest", ignore_missing_imports = true },
 ]
 
 [tool.pytest]

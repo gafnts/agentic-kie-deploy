@@ -7,6 +7,7 @@ Run via ``make smoke`` or ``uv run pytest -m integration --override-ini='addopts
 
 import json
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -114,13 +115,21 @@ class TestUploaderSmoke:
         upload_url = payload["upload_url"]
         key = urllib.parse.unquote(urllib.parse.urlparse(upload_url).path.lstrip("/"))
 
-        with urllib.request.urlopen(
-            urllib.request.Request(
-                upload_url, data=_PDF_PATH.read_bytes(), method="PUT"
-            ),
-            timeout=60,
-        ) as resp:
-            assert resp.status == 200, f"presigned PUT returned {resp.status}"
+        try:
+            with urllib.request.urlopen(
+                urllib.request.Request(
+                    upload_url, data=_PDF_PATH.read_bytes(), method="PUT"
+                ),
+                timeout=60,
+            ) as resp:
+                assert resp.status == 200, f"presigned PUT returned {resp.status}"
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            pytest.fail(
+                f"presigned PUT failed with {e.code} {e.reason}\n"
+                f"url: {upload_url}\n"
+                f"body: {body}"
+            )
 
         table = dynamodb.Table(results_table_name)
 
