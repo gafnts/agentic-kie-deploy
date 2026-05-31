@@ -265,6 +265,7 @@ jobs:
           name: tfplan-prod
           path: |
             infra/tfplan.prod
+            infra/modules/uploader/.build/presigner.zip
             plan.txt
           retention-days: 7
           if-no-files-found: error

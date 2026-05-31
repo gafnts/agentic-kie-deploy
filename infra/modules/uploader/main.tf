@@ -53,10 +53,6 @@ resource "aws_iam_role" "presigner" {
 }
 
 data "aws_iam_policy_document" "presigner" {
-  # The presigner does not upload anything itself, but the URL it signs
-  # inherits the signer's permissions — so the role must hold the action
-  # the URL grants. Scoped to uploads/ so a misuse cannot sign URLs for
-  # the analytics partition introduced by ADR-0012.
   statement {
     sid       = "IngestionPut"
     effect    = "Allow"
@@ -110,9 +106,6 @@ resource "aws_lambda_function" "presigner" {
   ]
 }
 
-# HTTP API over REST API: cheaper per request, lower latency, and AWS_IAM
-# is a first-class authorizer here — no custom Lambda authorizer required
-# (ADR-0010).
 resource "aws_apigatewayv2_api" "uploader" {
   name          = var.name
   protocol_type = "HTTP"
