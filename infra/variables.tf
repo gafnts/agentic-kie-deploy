@@ -1,31 +1,29 @@
-variable "aws_region" {
-  description = "AWS region where resources will be deployed"
-  type        = string
-  default     = "us-east-1"
-}
-
 variable "project_name" {
-  description = "Project name used for resource naming"
-  type        = string
-  default     = "agentic-kie-deploy"
+  type    = string
+  default = "agentic-kie-deploy"
 }
 
 variable "environment" {
-  description = "Deployment environment"
+  description = "One of: local, staging, prod. Gates deletion protection, log retention, and concurrency limits."
   type        = string
   default     = "staging"
 }
 
+variable "aws_region" {
+  type    = string
+  default = "us-east-1"
+}
+
 variable "allowed_upload_origins" {
-  description = "Origins allowed to make cross-origin PUT requests to the ingestion bucket"
+  description = "Origins allowed to make cross-origin PUT requests to the ingestion bucket."
   type        = list(string)
   default     = ["https://gabriel.com.gt"]
 }
 
-variable "llm_model" {
-  description = "LLM identifier for the extractor Lambda."
-  type        = string
-  default     = "gemini-3.1-flash-lite"
+variable "url_ttl_seconds" {
+  description = "Lifetime of the upload pre-signed URL the uploader module hands out. Tightening or loosening is a tfvar change per env with no other coordination."
+  type        = number
+  default     = 600
 }
 
 variable "extractor_image_digest" {
@@ -37,10 +35,10 @@ variable "extractor_image_digest" {
   }
 }
 
-variable "url_ttl_seconds" {
-  description = "Lifetime of the upload pre-signed URL the uploader module hands out. Tightening or loosening is a tfvar change per env with no other coordination (ADR-0010)."
-  type        = number
-  default     = 600
+variable "llm_model" {
+  description = "LLM identifier passed to the extractor Lambda."
+  type        = string
+  default     = "gemini-3.1-flash-lite"
 }
 
 variable "alarm_email" {
