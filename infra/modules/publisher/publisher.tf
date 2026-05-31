@@ -63,7 +63,7 @@ data "aws_iam_policy_document" "publisher" {
     sid       = "ResultsWrite"
     effect    = "Allow"
     actions   = ["s3:PutObject"]
-    resources = ["${aws_s3_bucket.results.arn}/extractions/*"]
+    resources = ["${var.analytics_bucket_arn}/${var.results_prefix}/*"]
   }
 
   # The event source mapping's on_failure destination delivers exhausted batches
@@ -106,7 +106,8 @@ resource "aws_lambda_function" "publisher" {
 
   environment {
     variables = {
-      ANALYTICS_BUCKET_NAME = aws_s3_bucket.results.bucket
+      ANALYTICS_BUCKET_NAME = var.analytics_bucket_name
+      RESULTS_PREFIX        = var.results_prefix
     }
   }
 

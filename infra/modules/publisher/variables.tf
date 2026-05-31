@@ -3,18 +3,23 @@ variable "function_name" {
   type        = string
 }
 
-variable "bucket_name" {
-  description = "Name of the analytics (extractions) S3 bucket the publisher writes result objects to and Athena queries. The Athena query-results bucket derives from this name with an athena-results suffix."
-  type        = string
-}
-
-variable "project_name" {
-  description = "Project name. Composed with environment into the Glue database name (project_environment_results) and Athena workgroup name (project-environment-results)."
-  type        = string
-}
-
 variable "source_table_stream_arn" {
   description = "ARN of the source DynamoDB table's NEW_IMAGE stream. The publisher's event source mapping subscribes to it; the execution role's StreamRead statement is scoped to it."
+  type        = string
+}
+
+variable "analytics_bucket_name" {
+  description = "Name of the analytics (extractions) bucket the publisher writes result objects to. Passed to the Lambda as the ANALYTICS_BUCKET_NAME env var."
+  type        = string
+}
+
+variable "analytics_bucket_arn" {
+  description = "ARN of the analytics bucket. Scopes the publisher's s3:PutObject grant to the bucket's results_prefix partition; the bucket itself is owned by the analytics module."
+  type        = string
+}
+
+variable "results_prefix" {
+  description = "Top-level S3 prefix (the partition root) under which result objects live, e.g. extractions. Single-sourced at the root: threaded to the Lambda as RESULTS_PREFIX and into the s3:PutObject IAM scope so the write path cannot drift from the analytics read path."
   type        = string
 }
 
@@ -62,36 +67,6 @@ variable "stream_retry_attempts" {
   description = "Retries before a failed batch lands in the DLQ. Mirrors the extractor's maxReceiveCount=3 for retry-budget symmetry across the pipeline."
   type        = number
   default     = 3
-}
-
-variable "athena_bytes_scanned_cutoff" {
-  description = "Per-query data-scan cap on the workgroup, in bytes. The workgroup is a budget boundary: Athena bills per TB scanned. Defaults to 1 GiB; raising it is an opt-in."
-  type        = number
-  default     = 1073741824 # 1 GiB
-}
-
-variable "athena_results_expiration_days" {
-  description = "Lifecycle expiration for Athena query results. Query results are debugging artifacts, not durable data, so they expire quickly."
-  type        = number
-  default     = 7
-}
-
-variable "noncurrent_version_expiration_days" {
-  description = "Days after which noncurrent object versions expire on the analytics bucket. Bounds versioning storage cost without losing the recovery window."
-  type        = number
-  default     = 30
-}
-
-variable "access_log_expiration_days" {
-  description = "Days after which access log objects expire on the results-logs bucket. Logs are operational artifacts, not durable records."
-  type        = number
-  default     = 90
-}
-
-variable "force_destroy" {
-  description = "Allow non-empty buckets (and the workgroup's query history) to be destroyed. Set true in non-prod so `make destroy` does not strand state."
-  type        = bool
-  default     = false
 }
 
 variable "log_retention_days" {
