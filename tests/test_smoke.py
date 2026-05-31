@@ -1,6 +1,14 @@
 """
 End-to-end smoke tests against deployed infrastructure.
 
+Two paths are covered:
+
+1. Extractor path. Ingestion bucket to analytics bucket:
+   S3 → Lambda → DynamoDB → Stream → Publisher → Analytics S3.
+
+2. Uploader path. Presigned upload to DynamoDB:
+   HTTP API (SigV4) → Presigned PUT → S3 → Lambda → DynamoDB.
+
 All tests in this module are marked ``integration`` and deselected by default.
 Run via ``make smoke`` or ``uv run pytest -m integration --override-ini='addopts='``.
 """
@@ -67,7 +75,7 @@ class TestExtractorSmoke:
             prev = time.time()
             with tqdm.tqdm(
                 total=180,
-                desc="S3 → Lambda → DynamoDB",
+                desc="S3 → Lambda → DynamoDB → Stream → Publisher → Analytics S3",
                 unit="s",
                 bar_format="{l_bar}{bar}| {n:.0f}/{total:.0f}s",
             ) as bar:
@@ -106,7 +114,7 @@ class TestExtractorSmoke:
 
 class TestUploaderSmoke:
     """
-    HTTP API (SigV4) → presigned PUT → S3 → Lambda → DynamoDB.
+    HTTP API (SigV4) → Presigned PUT → S3 → Lambda → DynamoDB.
     """
 
     @pytest.mark.timeout(300)
