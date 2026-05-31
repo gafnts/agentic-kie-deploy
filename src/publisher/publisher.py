@@ -77,7 +77,8 @@ def serialize(item: dict[str, Any]) -> str:
 def compose_key(created_at: str, document_id: str) -> str:
     """Compose the analytics object key from the claim day (ADR-0011 / ADR-0012)."""
     day = datetime.datetime.fromisoformat(created_at)
-    return f"extractions/{day:%Y/%m/%d}/{document_id}.json"
+    prefix = os.environ["RESULTS_PREFIX"]
+    return f"{prefix}/{day:%Y/%m/%d}/{document_id}.json"
 
 
 def put_result(key: str, item: dict[str, Any]) -> None:
