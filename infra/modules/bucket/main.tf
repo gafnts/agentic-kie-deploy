@@ -1,6 +1,10 @@
 resource "aws_s3_bucket" "ingestion" {
   bucket        = var.bucket_name
   force_destroy = var.force_destroy
+
+  tags = {
+    Environment = var.environment
+  }
 }
 
 resource "aws_s3_bucket_ownership_controls" "ingestion" {
@@ -68,6 +72,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "ingestion" {
   rule {
     id     = "transition-and-expire"
     status = "Enabled"
+
+    filter {}
 
     transition {
       days          = 30
