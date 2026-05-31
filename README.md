@@ -21,6 +21,8 @@
   - [Queue](#queue)
   - [Table](#table)
   - [Extractor](#extractor)
+  - [Publisher](#publisher)
+  - [Analytics](#analytics)
 - [Observability](#observability)
 - [Contributing](#contributing)
 - [Architecture decisions](docs/adr/README.md)
@@ -61,7 +63,8 @@ The infrastructure is organized as small, per-concern Terraform modules wired to
 | `queue` | [infra/modules/queue/](infra/modules/queue/) | Implemented |
 | `extractor` | [infra/modules/extractor/](infra/modules/extractor/) | Implemented |
 | `table` | [infra/modules/table/](infra/modules/table/) | Implemented |
-| `results` | [infra/modules/results/](infra/modules/results/) | Planned |
+| `publisher` | [infra/modules/publisher/](infra/modules/publisher/) | Implemented |
+| `analytics` | [infra/modules/analytics/](infra/modules/analytics/) | Implemented |
 | `alarms` | [infra/modules/alarms/](infra/modules/alarms/) | Implemented |
 
 ### Uploader
@@ -169,6 +172,49 @@ The Lambda holds no encryption story of its own: environment variables are encry
 > [!NOTE]
 > LLM telemetry ships to **LangSmith** (SaaS) at MVP—purpose-built UI, zero infrastructure cost at portfolio scale, OTel-GenAI-compatible migration path to a self-hosted Langfuse or Phoenix when real data lands. See [ADR-0009](docs/adr/0009-extractor-lambda.md)'s "Observability" section for the migration boundary.
 
+### Publisher
+
+The publisher is the feed that carries terminal extractions out of DynamoDB and into the analytics partition. A zip-packaged Lambda subscribes to the results table's DynamoDB Streams, filters to terminal rows, and writes each result payload as JSON to the analytics bucket at `extractions/{yyyy}/{mm}/{dd}/{document_id}.json`—the same address the caller learned at presign time. It carries its own dead-letter queue and alarms. It was split out of the former `results` module so the disposable feed no longer shares a plan blast radius with the durable store ([ADR-0014](docs/adr/0014-split-results-module.md)); the resource-level reasoning lives in [ADR-0012](docs/adr/0012-results-module.md), and S3-as-delivery in [ADR-0011](docs/adr/0011-s3-as-result-delivery.md).
+
+| Lever | Value | What it controls |
+|---|---|---|
+| Packaging | Python 3.13, zip | `boto3` plus one `PutObject` per record—no heavy dependencies, so the container-image cold-start tax ([ADR-0008](docs/adr/0008-ecr-registry-stack-and-digest-pinned-images.md)) the extractor pays is unjustified here, same as the presigner |
+| Timeout / memory | 30s / 256MB | One S3 `PutObject` per record across a batch of up to 100; the work is I/O-bound, so more memory does not reduce wall-clock |
+| Architecture | `arm64` | Same Graviton cost reasoning as the rest of the pipeline; the build is a zip on the right architecture |
+| Stream subscription | DynamoDB Streams event source mapping, `starting_position = LATEST` | Fans the table's terminal writes out to S3; the table owns the stream, the publisher owns the consumer |
+| Filter criteria | `eventName` in {`INSERT`, `MODIFY`}, `status` in {`succeeded`, `failed`} | Only terminal rows publish; in-progress and non-terminal updates never reach the Lambda, so no partial result ever lands in the analytics partition |
+| `batch_size` / batching window | 100 records / 5s | Stream records are tiny and the consumer does one PUT each, so batching amortizes invocation overhead; the 5s window bounds result-delivery tail latency |
+| `maximum_retry_attempts` | 3 | Mirrors the extraction queue's `maxReceiveCount = 3` for retry-budget symmetry across the pipeline |
+| Partial-batch failure | `bisect_batch_on_function_error` + `ReportBatchItemFailures` | One poison record does not re-drive the whole batch; the failure is isolated and only the failed record retries before landing in the DLQ |
+| Execution IAM | Stream read scoped to the table's stream ARN; `s3:PutObject` scoped to `${analytics_bucket}/${results_prefix}/*`; `sqs:SendMessage` on its own DLQ | Least-privilege on both ends of the feed; the write scope cannot drift from the analytics read path because `results_prefix` is single-sourced at the root ([ADR-0014](docs/adr/0014-split-results-module.md)) |
+| Concurrency | No reserved or maximum | The PUT is cheap and stream shards already bound parallelism; throttles are covered by an alarm at the account ceiling |
+| Logs | 14d (staging/local), 30d (prod) | Operational telemetry only, parity with the rest of the pipeline |
+
+Exhausted batches land in a dedicated dead-letter queue (14-day retention, SSE-SQS, TLS-only policy), and a `${publisher-dlq}-messages-visible` alarm pages on it. Function-level `errors` and `throttles` alarms round out the publisher's coverage in the [Observability](#observability) section.
+
+> [!NOTE]
+> The result payload the publisher writes and the Glue table's column list in the analytics module are a documented lockstep that crosses both the Python/HCL boundary and (since the split) a module boundary. The guard is unchanged: the integration smoke test asserts the round-trip object lands and matches, and the Glue SerDe's `ignore.malformed.json` tolerates additive drift. See [ADR-0014](docs/adr/0014-split-results-module.md) and [ADR-0012](docs/adr/0012-results-module.md)'s post-implementation notes.
+
+### Analytics
+
+The analytics module is the durable store and its query surface—the half of the former `results` module that holds the irreplaceable record ([ADR-0014](docs/adr/0014-split-results-module.md)). The `extractions` bucket holds the result objects the publisher writes; the caller subscribes to its `s3:ObjectCreated:*` events to learn the moment a result lands ([ADR-0011](docs/adr/0011-s3-as-result-delivery.md)); and the same objects back a projected Glue `extractions` table queried through a dedicated Athena workgroup.
+
+| Lever | Value | What it controls |
+|---|---|---|
+| Bucket hardening | PAB (all four flags), `BucketOwnerEnforced`, TLS-only deny policy, SSE-S3 (AES256) | The analytics store is locked down with the same four-layer posture as the ingestion bucket |
+| Storage tier | `STANDARD` only; no cold-tier transition; no current-version expiration | Athena queries the objects on demand and cannot transparently restore from Glacier, and the results are the durable record of work, so they never tier out or expire |
+| Versioning + lifecycle | Versioning enabled; noncurrent versions expire at 30d; incomplete multipart uploads abort at 7d | Recovery from accidental overwrite without unbounded version-storage cost |
+| Server-access logging | Sibling `${bucket}-logs` bucket (PAB, AES256, 90-day expiry) | Request-level audit trail on every operation, independent of CloudTrail |
+| Event notifications | EventBridge enabled on the bucket | The caller's `s3:ObjectCreated:*` subscription on the `extractions/` prefix fires the moment a result object lands |
+| Catalog | Glue `extractions` table, partition projection on `year`/`month`/`day` | Athena computes partitions from the path template at query time, so no crawler and no `MSCK REPAIR` job is needed |
+| SerDe | OpenX JSON SerDe, `ignore.malformed.json = true`, nested maps typed as `string` | Returns raw JSON for the evolving `extracted_fields`/`confidences` (queryable with `json_extract`) without coupling the table to their schema; `token_usage` stays a `struct` so per-window cost is a direct `SUM(token_usage.input)` |
+| Athena workgroup | Dedicated workgroup; `bytes_scanned_cutoff_per_query` (1 GiB default); enforced config; pinned result location (SSE-S3) | A cost boundary (Athena bills per TB scanned) and a query-routing isolation point; query-results objects are debugging artifacts and expire at 7d |
+
+The Glue database (`{project}_{environment}_analytics`) and the workgroup (`{project}-{environment}-analytics`) are named for the subsystem, not the dataset; the table keeps the dataset name, `extractions`, so a query reads naturally as `analytics.extractions`. After the split, nothing in the query layer carries the word `results`, which now denotes exactly one thing: the DynamoDB [table](#table).
+
+> [!NOTE]
+> The analytics bucket is the result-delivery surface, but the caller's `s3:GetObject` grant on `extractions/*` deliberately lives on the caller's side, not in this module—the module exposes `bucket_arn` for the caller to scope its own grant against, and each deployed instance serves exactly one caller ([ADR-0013](docs/adr/0013-single-tenant-deployment-model.md)). The bucket uses SSE-S3 (AES256); for regulated result data, the same SSE-KMS migration sketched for the ingestion bucket and the table applies.
+
 ---
 
 ## Observability
@@ -184,7 +230,7 @@ The two share a `document_id` correlation key but otherwise have nothing in comm
 
 ### Alarms
 
-The alarms module owns the alerting plane: one SNS topic per environment, plus an optional email subscription, that every CloudWatch alarm in the stack publishes to. Function-level and queue-level alarms live next to the resources they watch (uploader module, extractor module, queue module) and reference this topic by ARN, so the alerting fan-out is one resource rather than one-per-alarm.
+The alarms module owns the alerting plane: one SNS topic per environment, plus an optional email subscription, that every CloudWatch alarm in the stack publishes to. Function-level and queue-level alarms live next to the resources they watch (uploader, extractor, queue, and publisher modules) and reference this topic by ARN, so the alerting fan-out is one resource rather than one-per-alarm.
 
 | Lever | Value | What it controls |
 |---|---|---|
@@ -192,7 +238,7 @@ The alarms module owns the alerting plane: one SNS topic per environment, plus a
 | Email subscription | Optional (`alarm_email` tfvar; null disables) | Local/dev runs without notifications; staging/prod set the address per environment. Subscriptions require manual confirmation from the recipient's inbox before delivery starts |
 | Topic policy | AWS default (account-only publish) | CloudWatch in the same account can publish without an explicit policy; no cross-account fan-out at this scope |
 
-Five CloudWatch alarms cover the operational hot path. Each is a 1-of-1 5-minute evaluation, treats missing data as `notBreaching` (idle infrastructure is not a failure), and publishes to the topic above on both alarm and OK transitions.
+Eight CloudWatch alarms cover the operational hot path. Each is a 1-of-1 5-minute evaluation, treats missing data as `notBreaching` (idle infrastructure is not a failure), and publishes to the topic above on both alarm and OK transitions.
 
 | Alarm | Source | Fires when | Why it matters |
 |---|---|---|---|
@@ -201,8 +247,11 @@ Five CloudWatch alarms cover the operational hot path. Each is a 1-of-1 5-minute
 | `${presigner}-errors` | `AWS/Lambda` `Errors` (Sum) on the presigner | `> 0` over 5 min | The presigner does one `generate_presigned_url` call—non-zero errors imply an IAM regression or a malformed request that slipped past API Gateway |
 | `${presigner}-throttles` | `AWS/Lambda` `Throttles` (Sum) on the presigner | `> 0` over 5 min | The presigner has no reserved or maximum concurrency ([ADR-0010](docs/adr/0010-uploader-module.md)); throttles imply the account concurrency ceiling is being approached |
 | `${dlq}-messages-visible` | `AWS/SQS` `ApproximateNumberOfMessagesVisible` (Max) on the DLQ | `> 0` over 5 min | A message in the DLQ means a document exhausted its three retries. The DLQ is the single source of truth for failed messages ([ADR-0005](docs/adr/0005-sqs-dlq-retry-topology.md)); this alarm is the page on it |
+| `${publisher}-errors` | `AWS/Lambda` `Errors` (Sum) on the publisher | `> 0` over 5 min | An unhandled exception in the Streams consumer. Result objects silently stop reaching S3 while the extractor keeps writing terminal rows to DynamoDB |
+| `${publisher}-throttles` | `AWS/Lambda` `Throttles` (Sum) on the publisher | `> 0` over 5 min | The publisher has no reserved or maximum concurrency; throttles stall result publishing and leave `succeeded`/`failed` rows without matching S3 objects |
+| `${publisher-dlq}-messages-visible` | `AWS/SQS` `ApproximateNumberOfMessagesVisible` (Max) on the publisher DLQ | `> 0` over 5 min | A stream batch exhausted `maximum_retry_attempts`. The single source of truth for failed batches, mirroring the extractor DLQ alarm ([ADR-0014](docs/adr/0014-split-results-module.md)) |
 
-`IteratorAge` is intentionally not wired—it's a Kinesis/DDB Streams metric, not an SQS-Lambda one. `ConcurrentExecutions` is not wired either; it overlaps the Throttles signal at this scale.
+`IteratorAge` is not wired: on the extractor it does not apply (an SQS-Lambda consumer, not a streams one), and on the publisher the DLQ and Errors alarms already catch a stalled or failing consumer. `ConcurrentExecutions` is not wired either; it overlaps the Throttles signal at this scale.
 
 ## Contributing
 
