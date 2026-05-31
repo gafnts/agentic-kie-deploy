@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted (2026-05-24)
+Accepted (2026-05-24). **Superseded by ADR-0014 (2026-05-31).**
+
+> [!NOTE]
+> ADR-0014 supersedes this ADR's **packaging and naming** decision only: the single `results` module is split into per-concern `publisher` and `analytics` modules. Every resource-level decision below (the Streams consumer, the bucket hardening, partition projection, the Athena workgroup, the IAM and alarms) carries forward unchanged. This ADR (and its post-implementation notes) remains the reference for *why each resource is built the way it is*; ADR-0014 governs *where those resources live*.
 
 ## Context
 
