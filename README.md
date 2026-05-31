@@ -99,8 +99,6 @@ The ingestion bucket is the entry point of the pipeline. Clients upload document
 
 EventBridge notifications are enabled on the bucket so object-creation events flow into the rest of the system. The routing rule lives with the queue module.
 
-CORS is configured to allow `PUT` requests from the origins listed in `allowed_upload_origins`, which is the only method clients need to deposit documents.
-
 Three operational settings sit alongside the hardening layers—they aren't part of the access-control posture, but the bucket needs them to be operationally sound rather than just locked down:
 
 | Setting | Mechanism | What it gives us |

@@ -29,6 +29,8 @@ Three settings on the ingestion bucket sit outside the four-layer hardening post
 
 CORS (PUT-only from `var.allowed_upload_origins`) and the EventBridge `Object Created` notification are also provisioned by this module; both belong to upstream contracts (the presigner's CORS contract, the queue module's routing rule) and are documented at those boundaries.
 
+> **Update (2026-05-31):** The CORS rule and `var.allowed_upload_origins` have been removed. CORS is a browser-only enforcement mechanism, but ADR-0010 subsequently settled the presigner as a server-to-server, AWS-native integration with no browser in the loop—the "presigner's CORS contract" anticipated here never materialized, so the rule guarded an upload path the architecture does not have. The EventBridge `Object Created` notification is unaffected and remains as described.
+
 ## Consequences
 
 Positive:
