@@ -120,7 +120,7 @@ resource "aws_glue_catalog_table" "extractions" {
     "projection.day.type"       = "integer"
     "projection.day.range"      = "1,31"
     "projection.day.digits"     = "2"
-    "storage.location.template" = "s3://${aws_s3_bucket.results.bucket}/extractions/$${year}/$${month}/$${day}/"
+    "storage.location.template" = "s3://${aws_s3_bucket.results.bucket}/${var.results_prefix}/$${year}/$${month}/$${day}/"
   }
 
   partition_keys {
@@ -137,7 +137,7 @@ resource "aws_glue_catalog_table" "extractions" {
   }
 
   storage_descriptor {
-    location      = "s3://${aws_s3_bucket.results.bucket}/extractions/"
+    location      = "s3://${aws_s3_bucket.results.bucket}/${var.results_prefix}/"
     input_format  = "org.apache.hadoop.mapred.TextInputFormat"
     output_format = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
 
