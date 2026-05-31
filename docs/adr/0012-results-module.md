@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted (2026-05-24)
+Accepted (2026-05-24). **Superseded by ADR-0014 (2026-05-31).**
+
+> [!NOTE]
+> ADR-0014 supersedes this ADR's **packaging and naming** decision only: the single `results` module is split into per-concern `publisher` and `analytics` modules. Every resource-level decision below (the Streams consumer, the bucket hardening, partition projection, the Athena workgroup, the IAM and alarms) carries forward unchanged. This ADR (and its post-implementation notes) remains the reference for *why each resource is built the way it is*; ADR-0014 governs *where those resources live*.
 
 ## Context
 
@@ -287,3 +290,19 @@ Neutral:
 - **Lifecycle transition to IA or Glacier on the analytics bucket.** Rejected—Athena cannot transparently query Glacier objects. Cold-tier transitions would silently break the query layer without any signal at the bucket level.
 - **Unbounded Athena workgroup.** Rejected—an unbounded workgroup is one bad query away from a surprise bill. The scan-cutoff is the default budget boundary; raising it is a deliberate opt-in.
 - **No DLQ on the publisher event source mapping.** Rejected—without it, a failing batch after `maximum_retry_attempts` would be discarded silently. The DLQ is the single source of truth for failed batches, mirroring ADR-0005's queue posture.
+
+## Post-implementation notes
+
+Implemented 2026-05-31. The module shipped as designed; the points below are deliberate deviations from the *literal* text of this ADR—each a place where the prose or an illustrative snippet was schematic. They are recorded here so the divergence reads as intent, not drift.
+
+- **`source_table_arn` is not a module input.** The wiring snippet passes `source_table_arn = module.table.table_arn`, but no resource in the module references the table ARN—the publisher subscribes to, and its IAM is scoped against, the *stream* ARN. Passing the table ARN would leave an unused variable, so it was dropped. The event-source-mapping-to-table ordering dependency still flows through `module.table.stream_arn`, which only exists once Streams is enabled.
+
+- **The execution role carries two statements the IAM table omits.** `dynamodb:ListStreams` is split into its own statement scoped to `*`: the action does not support resource-level scoping, so granting it on the stream ARN (as the single `StreamsConsume` row implies) would deny it and break the event source mapping. The record-level reads (`DescribeStream`, `GetRecords`, `GetShardIterator`) stay scoped to the stream ARN. Separately, a `DlqWrite` statement grants `sqs:SendMessage` on the publisher DLQ—the mapping's `on_failure` destination delivers exhausted batches using the function's execution role, so without it the DLQ silently receives nothing, defeating the alarm this ADR calls the single source of truth for failed batches.
+
+- **The module takes `project_name`.** The wiring snippet does not pass it, but the Glue database (`${project_name}_${environment}_results`) and Athena workgroup (`${project_name}-${environment}-results`) names reference it directly. It is passed from the root alongside the pre-composed `function_name` and `bucket_name`.
+
+- **Glue column types were chosen at implementation.** The table snippet left the column list as a comment. `token_usage` and `error` are typed as structs (`struct<input:int,output:int>`, `struct<code:string,message:string>`) so the headline cost-attribution query is a direct `SUM(token_usage.input)` with no `json_extract`. `extracted_fields` and `confidences` are typed as `string`, which the OpenX JSON SerDe returns as raw JSON—analysts reach into them with `json_extract`, and the table needs no migration when the `agentic-kie` schema evolves. The rest are scalars as written.
+
+The analytics bucket has no server access logging (the four-layer hardening of ADR-0003 does not include it), so the corresponding low-severity scanner finding is suppressed in-module—a scope choice consistent with this ADR's bucket-settings table, not a deviation from it.
+
+Outside the module, three coupled changes shipped with it: the table module enables Streams and exposes `stream_arn` (ADR-0007's update, closing its Streams deferral); the deploy workflows gained `src/results/**` path triggers and bundle `publisher.zip` into the prod plan artifact, mirroring the presigner; and the publisher landed with unit tests plus a smoke-test assertion that the result object reaches the analytics partition.

@@ -29,5 +29,6 @@ This directory records the significant architectural decisions made in this proj
 | [0009](0009-extractor-lambda.md) | Extractor Lambda sizing, concurrency, idempotency, observability and IAM posture | Accepted |
 | [0010](0010-uploader-module.md) | Uploader module (presigner, API Gateway, IAM authentication) | Accepted |
 | [0011](0011-s3-as-result-delivery.md) | S3 as result delivery | Accepted |
-| [0012](0012-results-module.md) | Results module (Streams consumer, analytics bucket, Glue and Athena) | Accepted |
+| [0012](0012-results-module.md) | Results module (Streams consumer, analytics bucket, Glue and Athena) | Superseded by ADR-0014 |
 | [0013](0013-single-tenant-deployment-model.md) | Single-tenant deployment model | Accepted |
+| [0014](0014-split-results-module.md) | Split the results module into publisher and analytics | Accepted |

@@ -9,6 +9,9 @@ resource "aws_dynamodb_table" "results" {
     type = "S"
   }
 
+  stream_enabled   = true
+  stream_view_type = "NEW_IMAGE"
+
   server_side_encryption {
     enabled = true
   }
@@ -23,4 +26,8 @@ resource "aws_dynamodb_table" "results" {
   }
 
   deletion_protection_enabled = var.deletion_protection_enabled
+
+  tags = {
+    Environment = var.environment
+  }
 }
