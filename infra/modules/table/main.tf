@@ -26,4 +26,8 @@ resource "aws_dynamodb_table" "results" {
   }
 
   deletion_protection_enabled = var.deletion_protection_enabled
+
+  tags = {
+    Environment = var.environment
+  }
 }

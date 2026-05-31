@@ -8,3 +8,8 @@ variable "deletion_protection_enabled" {
   type        = bool
   default     = false
 }
+
+variable "environment" {
+  description = "Deployment environment (local, staging, prod). Surfaces on resource tags the iam/ stack's DenyTouchingOtherEnvs guard reads."
+  type        = string
+}

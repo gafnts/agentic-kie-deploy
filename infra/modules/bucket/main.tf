@@ -133,6 +133,10 @@ resource "aws_s3_bucket_policy" "ingestion_tls_only" {
 resource "aws_s3_bucket" "ingestion_logs" {
   bucket        = "${var.bucket_name}-logs"
   force_destroy = var.force_destroy
+
+  tags = {
+    Environment = var.environment
+  }
 }
 
 resource "aws_s3_bucket_ownership_controls" "ingestion_logs" {

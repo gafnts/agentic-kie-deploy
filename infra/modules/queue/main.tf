@@ -6,6 +6,10 @@ resource "aws_sqs_queue" "extraction_dlq" {
   name                      = "${var.name}-dlq"
   message_retention_seconds = 1209600 # 14 days
   sqs_managed_sse_enabled   = true
+
+  tags = {
+    Environment = var.environment
+  }
 }
 
 resource "aws_sqs_queue" "extraction" {
@@ -19,11 +23,19 @@ resource "aws_sqs_queue" "extraction" {
     deadLetterTargetArn = aws_sqs_queue.extraction_dlq.arn
     maxReceiveCount     = var.max_receive_count
   })
+
+  tags = {
+    Environment = var.environment
+  }
 }
 
 resource "aws_cloudwatch_event_rule" "object_created" {
   name        = "${var.name}-object-created"
   description = "Route S3 Object Created events from the ingestion bucket to the extraction queue"
+
+  tags = {
+    Environment = var.environment
+  }
 
   event_pattern = jsonencode({
     source        = ["aws.s3"]
