@@ -9,6 +9,9 @@ resource "aws_dynamodb_table" "results" {
     type = "S"
   }
 
+  stream_enabled   = true
+  stream_view_type = "NEW_IMAGE"
+
   server_side_encryption {
     enabled = true
   }
