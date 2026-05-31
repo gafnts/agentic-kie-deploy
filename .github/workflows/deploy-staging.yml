@@ -202,30 +202,55 @@ jobs:
         id: current
         env:
           FUNCTION_NAME: agentic-kie-deploy-${{ env.ENV }}-extractor
+          REPOSITORY: agentic-kie-deploy-${{ env.ENV }}-extractor
         run: |
-          IMAGE_URI=$(aws lambda get-function \
+          set -euo pipefail
+
+          if IMAGE_URI=$(aws lambda get-function \
             --function-name "$FUNCTION_NAME" \
             --query 'Code.ImageUri' \
-            --output text 2>err.log)
-          rc=$?
-          if [ $rc -ne 0 ]; then
-            if grep -q "ResourceNotFoundException" err.log; then
-              echo "::error::Lambda $FUNCTION_NAME not found. First-time deploys must include a change under src/extractor/ to trigger a build."
-            else
-              echo "::error::Failed to query Lambda $FUNCTION_NAME:"
-              cat err.log >&2
-            fi
-            exit 1
+            --output text 2>err.log); then
+
+            DIGEST="${IMAGE_URI##*@}"
+            case "$DIGEST" in
+              sha256:*)
+                echo "value=$DIGEST" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              *)
+                echo "::error::Lambda $FUNCTION_NAME ImageUri is not digest-pinned: $IMAGE_URI"
+                exit 1
+                ;;
+            esac
           fi
-          DIGEST="${IMAGE_URI##*@}"
-          case "$DIGEST" in
-            sha256:*) ;;
-            *)
-              echo "::error::Lambda $FUNCTION_NAME ImageUri is not digest-pinned: $IMAGE_URI"
+
+          if grep -q 'ResourceNotFoundException' err.log; then
+            echo "::warning::Lambda $FUNCTION_NAME not found; falling back to latest ECR image digest."
+            DIGEST=$(aws ecr describe-images \
+              --repository-name "$REPOSITORY" \
+              --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageDigest' \
+              --output text 2>/dev/null || true)
+
+            if [ -z "${DIGEST:-}" ] || [ "$DIGEST" = "None" ]; then
+              echo "::error::No existing Lambda and no image found in ECR repository $REPOSITORY. Include a change under src/extractor/ to trigger an initial build."
               exit 1
-              ;;
-          esac
-          echo "value=$DIGEST" >> "$GITHUB_OUTPUT"
+            fi
+
+            case "$DIGEST" in
+              sha256:*)
+                echo "value=$DIGEST" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              *)
+                echo "::error::Resolved ECR digest is invalid: $DIGEST"
+                exit 1
+                ;;
+            esac
+          fi
+
+          echo "::error::Failed to query Lambda $FUNCTION_NAME:"
+          cat err.log >&2
+          exit 1
 
   apply:
     name: Apply
