@@ -9,7 +9,7 @@ on:
       - "!infra/registry/**"
       - "src/extractor/**"
       - "src/uploader/**"
-      - "src/results/**"
+      - "src/publisher/**"
       - ".github/workflows/deploy-prod.yml"
   pull_request:
     branches: [main]
@@ -19,7 +19,7 @@ on:
       - "!infra/registry/**"
       - "src/extractor/**"
       - "src/uploader/**"
-      - "src/results/**"
+      - "src/publisher/**"
       - ".github/workflows/deploy-prod.yml"
 
 permissions:
@@ -268,7 +268,7 @@ jobs:
           path: |
             infra/tfplan.prod
             infra/modules/uploader/.build/presigner.zip
-            infra/modules/results/.build/publisher.zip
+            infra/modules/publisher/.build/publisher.zip
             plan.txt
           retention-days: 7
           if-no-files-found: error
