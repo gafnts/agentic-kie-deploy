@@ -12,11 +12,11 @@ output "uploader_function_name" {
 }
 
 output "ingestion_bucket_name" {
-  value = module.bucket.bucket_name
+  value = module.ingestion.bucket_name
 }
 
 output "ingestion_bucket_arn" {
-  value = module.bucket.bucket_arn
+  value = module.ingestion.bucket_arn
 }
 
 output "extraction_queue_url" {
@@ -53,4 +53,29 @@ output "extractor_log_group_name" {
 
 output "alarm_topic_arn" {
   value = module.alarms.topic_arn
+}
+
+output "analytics_bucket_name" {
+  value = module.results.bucket_name
+}
+
+output "analytics_bucket_arn" {
+  description = "ARN of the analytics bucket. The caller scopes its s3:GetObject grant to the bucket's extractions/ prefix."
+  value       = module.results.bucket_arn
+}
+
+output "publisher_function_name" {
+  value = module.results.function_name
+}
+
+output "publisher_dlq_arn" {
+  value = module.results.dlq_arn
+}
+
+output "results_glue_database_name" {
+  value = module.results.glue_database_name
+}
+
+output "results_athena_workgroup_name" {
+  value = module.results.athena_workgroup_name
 }

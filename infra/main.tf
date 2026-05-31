@@ -24,8 +24,12 @@ data "aws_ecr_repository" "extractor" {
 }
 
 locals {
-  bucket_suffix             = substr(sha256("${var.project_name}-${var.environment}-${data.aws_caller_identity.current.account_id}"), 0, 16)
-  bucket_name               = "${var.project_name}-${var.environment}-ingestion-${local.bucket_suffix}"
+  ingestion_bucket_suffix = substr(sha256("${var.project_name}-${var.environment}-${data.aws_caller_identity.current.account_id}"), 0, 16)
+  ingestion_bucket_name   = "${var.project_name}-${var.environment}-ingestion-${local.ingestion_bucket_suffix}"
+
+  results_bucket_suffix = substr(sha256("${var.project_name}-${var.environment}-extractions-${data.aws_caller_identity.current.account_id}"), 0, 16)
+  results_bucket_name   = "${var.project_name}-${var.environment}-extractions-${local.results_bucket_suffix}"
+
   extractor_timeout_seconds = 120
 }
 
@@ -36,18 +40,19 @@ module "alarms" {
   environment    = var.environment
 }
 
-module "bucket" {
+module "ingestion" {
   source                 = "./modules/bucket"
-  bucket_name            = local.bucket_name
+  bucket_name            = local.ingestion_bucket_name
   allowed_upload_origins = var.allowed_upload_origins
   force_destroy          = var.environment != "prod"
+  environment            = var.environment
 }
 
 module "uploader" {
   source                = "./modules/uploader"
   name                  = "${var.project_name}-${var.environment}-uploader"
-  ingestion_bucket_arn  = module.bucket.bucket_arn
-  ingestion_bucket_name = module.bucket.bucket_name
+  ingestion_bucket_arn  = module.ingestion.bucket_arn
+  ingestion_bucket_name = module.ingestion.bucket_name
   url_ttl_seconds       = var.url_ttl_seconds
   log_retention_days    = var.environment == "prod" ? 30 : 14
   environment           = var.environment
@@ -57,7 +62,7 @@ module "uploader" {
 module "queue" {
   source                 = "./modules/queue"
   name                   = "${var.project_name}-${var.environment}-extraction"
-  source_bucket_name     = module.bucket.bucket_name
+  source_bucket_name     = module.ingestion.bucket_name
   lambda_timeout_seconds = local.extractor_timeout_seconds
   alarm_topic_arn        = module.alarms.topic_arn
   environment            = var.environment
@@ -67,6 +72,7 @@ module "table" {
   source                      = "./modules/table"
   table_name                  = "${var.project_name}-${var.environment}-results"
   deletion_protection_enabled = var.environment == "prod"
+  environment                 = var.environment
 }
 
 module "extractor" {
@@ -80,13 +86,25 @@ module "extractor" {
   max_concurrency         = var.environment == "prod" ? 25 : 10
   queue_arn               = module.queue.queue_arn
   queue_max_receive_count = module.queue.max_receive_count
-  ingestion_bucket_arn    = module.bucket.bucket_arn
+  ingestion_bucket_arn    = module.ingestion.bucket_arn
   results_table_arn       = module.table.table_arn
   results_table_name      = module.table.table_name
   llm_model               = var.llm_model
   llm_provider_secret_arn = data.aws_secretsmanager_secret.llm_provider.arn
   langsmith_secret_arn    = data.aws_secretsmanager_secret.langsmith.arn
   langsmith_project       = "${var.project_name}-${var.environment}"
+  log_retention_days      = var.environment == "prod" ? 30 : 14
+  environment             = var.environment
+  alarm_topic_arn         = module.alarms.topic_arn
+}
+
+module "results" {
+  source                  = "./modules/results"
+  function_name           = "${var.project_name}-${var.environment}-publisher"
+  bucket_name             = local.results_bucket_name
+  project_name            = var.project_name
+  source_table_stream_arn = module.table.stream_arn
+  force_destroy           = var.environment != "prod"
   log_retention_days      = var.environment == "prod" ? 30 : 14
   environment             = var.environment
   alarm_topic_arn         = module.alarms.topic_arn
