@@ -55,27 +55,27 @@ output "extractor_log_group_name" {
   value = module.extractor.log_group_name
 }
 
+output "publisher_function_name" {
+  value = module.publisher.function_name
+}
+
+output "publisher_dlq_arn" {
+  value = module.publisher.dlq_arn
+}
+
 output "analytics_bucket_name" {
-  value = module.results.bucket_name
+  value = module.analytics.bucket_name
 }
 
 output "analytics_bucket_arn" {
   description = "ARN of the analytics bucket. The caller scopes its s3:GetObject grant to the bucket's extractions/ prefix."
-  value       = module.results.bucket_arn
+  value       = module.analytics.bucket_arn
 }
 
-output "publisher_function_name" {
-  value = module.results.function_name
+output "analytics_glue_database_name" {
+  value = module.analytics.glue_database_name
 }
 
-output "publisher_dlq_arn" {
-  value = module.results.dlq_arn
-}
-
-output "results_glue_database_name" {
-  value = module.results.glue_database_name
-}
-
-output "results_athena_workgroup_name" {
-  value = module.results.athena_workgroup_name
+output "analytics_athena_workgroup_name" {
+  value = module.analytics.athena_workgroup_name
 }

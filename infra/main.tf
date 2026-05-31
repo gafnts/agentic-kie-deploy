@@ -31,6 +31,10 @@ locals {
   results_bucket_name   = "${var.project_name}-${var.environment}-extractions-${local.results_bucket_suffix}"
 
   extractor_timeout_seconds = 120
+
+  # Partition root for result objects, single-sourced here and threaded into both
+  # the publisher (write path) and analytics (Glue/Athena read path) modules.
+  results_prefix = "extractions"
 }
 
 module "alarms" {
@@ -98,14 +102,23 @@ module "extractor" {
   alarm_topic_arn         = module.alarms.topic_arn
 }
 
-module "results" {
-  source                  = "./modules/results"
+module "publisher" {
+  source                  = "./modules/publisher"
   function_name           = "${var.project_name}-${var.environment}-publisher"
-  bucket_name             = local.results_bucket_name
-  project_name            = var.project_name
   source_table_stream_arn = module.table.stream_arn
-  force_destroy           = var.environment != "prod"
+  analytics_bucket_name   = module.analytics.bucket_name
+  analytics_bucket_arn    = module.analytics.bucket_arn
+  results_prefix          = local.results_prefix
   log_retention_days      = var.environment == "prod" ? 30 : 14
   environment             = var.environment
   alarm_topic_arn         = module.alarms.topic_arn
+}
+
+module "analytics" {
+  source         = "./modules/analytics"
+  bucket_name    = local.results_bucket_name
+  project_name   = var.project_name
+  results_prefix = local.results_prefix
+  force_destroy  = var.environment != "prod"
+  environment    = var.environment
 }
