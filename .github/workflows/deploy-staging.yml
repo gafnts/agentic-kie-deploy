@@ -9,6 +9,7 @@ on:
       - "!infra/registry/**"
       - "src/extractor/**"
       - "src/uploader/**"
+      - "src/results/**"
       - ".github/workflows/deploy-staging.yml"
   pull_request:
     branches: [develop]
@@ -18,6 +19,7 @@ on:
       - "!infra/registry/**"
       - "src/extractor/**"
       - "src/uploader/**"
+      - "src/results/**"
       - ".github/workflows/deploy-staging.yml"
 
 permissions:
