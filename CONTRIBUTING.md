@@ -176,7 +176,7 @@ Terraform discovers the secrets by name at plan time—no ARNs to copy or paste.
 > Terraform manages the IAM grants on these secrets but **not** their values. Rotating a key is `aws secretsmanager update-secret` against the existing secret; the Lambda picks the new value up on the next cold start (warm invocations within a ~15-minute execution-environment lifetime continue to see the old value, by design).
 
 > [!NOTE]
-> The uploader module has no out-of-band setup. It is part of the service stack and picks up `url_ttl_seconds` and `allowed_upload_origins` from tfvars at apply time.
+> The uploader module has no out-of-band setup. It is part of the service stack and picks up `url_ttl_seconds` from tfvars at apply time.
 
 ### Configure GitHub
 

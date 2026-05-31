@@ -45,11 +45,10 @@ module "alarms" {
 }
 
 module "ingestion" {
-  source                 = "./modules/bucket"
-  bucket_name            = local.ingestion_bucket_name
-  allowed_upload_origins = var.allowed_upload_origins
-  force_destroy          = var.environment != "prod"
-  environment            = var.environment
+  source        = "./modules/bucket"
+  bucket_name   = local.ingestion_bucket_name
+  force_destroy = var.environment != "prod"
+  environment   = var.environment
 }
 
 module "uploader" {

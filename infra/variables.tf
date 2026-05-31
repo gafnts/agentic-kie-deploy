@@ -14,12 +14,6 @@ variable "aws_region" {
   default = "us-east-1"
 }
 
-variable "allowed_upload_origins" {
-  description = "Origins allowed to make cross-origin PUT requests to the ingestion bucket."
-  type        = list(string)
-  default     = ["https://gabriel.com.gt"]
-}
-
 variable "url_ttl_seconds" {
   description = "Lifetime of the upload pre-signed URL the uploader module hands out. Tightening or loosening is a tfvar change per env with no other coordination."
   type        = number
