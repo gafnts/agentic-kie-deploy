@@ -12,7 +12,7 @@ The `table` module is the system of record for extraction results. Four decision
 
 `document_id` (UUIDv7, fixed in ADR-0006) is the only identifier callers ever need. There is at most one canonical extraction per document, and the polling endpoint reads by `GetItem(document_id)`. A sort key would only earn its place if we kept extraction history (e.g. one row per re-run), and that is not a current requirement.
 
-The PK choice is also load-bearing for idempotency. Because `document_id` is minted once at presign (ADR-0006), every SQS redelivery of the same upload event resolves to the same partition key. Without that, no amount of conditional writes in the extractor would help—retries would simply land on different rows.
+The PK choice is also critical for idempotency. Because `document_id` is minted once at presign (ADR-0006), every SQS redelivery of the same upload event resolves to the same partition key. Without that, no amount of conditional writes in the extractor would help—retries would simply land on different rows.
 
 ### What goes inside an item
 
@@ -41,7 +41,7 @@ For parity with the storage module's posture, and to keep both data stores' encr
 
 ### Streams
 
-DynamoDB Streams enables change-driven downstream consumers (e.g. a webhook on completion, an analytics fan-out, a search index sync). There is no such consumer today. Enabling Streams is a non-breaking change—turning it on later does not require a table rebuild—so the cost of deferring is essentially zero.
+DynamoDB Streams enables change-driven downstream consumers (e.g. a webhook on completion, an analytics fan-out, a search index sync). When this ADR was first accepted there was no such consumer; Streams was deferred on the grounds that enabling it later is non-breaking. ADR-0012 introduced exactly such a consumer—the results-publisher Lambda that fans the extractor's terminal write out to the analytics S3 partition—so Streams is now enabled with `NEW_IMAGE` view, and the deferral is closed.
 
 ## Decision
 
@@ -94,6 +94,9 @@ resource "aws_dynamodb_table" "results" {
     type = "S"
   }
 
+  stream_enabled   = true
+  stream_view_type = "NEW_IMAGE"
+
   server_side_encryption {
     enabled = true
     # kms_key_arn omitted -> AWS-managed aws/dynamodb key
@@ -136,17 +139,48 @@ Unlike S3, DynamoDB re-encrypts existing items in place when the key changes, so
 
 ### Streams
 
-Disabled. Re-evaluate when a concrete change-driven consumer (webhook, analytics fan-out, search index) is in scope. Enabling later does not require a rebuild.
+Enabled with `stream_view_type = "NEW_IMAGE"`. The `NEW_IMAGE` view is what the results publisher (ADR-0012) needs to project the terminal row into the S3 result payload without a follow-up `GetItem`. The table module exposes the stream ARN as an output so the results module can subscribe its event source mapping to it.
+
+```hcl
+resource "aws_dynamodb_table" "results" {
+  # ... attributes and key schema as above ...
+
+  stream_enabled   = true
+  stream_view_type = "NEW_IMAGE"
+
+  # ... encryption, PITR, TTL, deletion protection as above ...
+}
+
+output "stream_arn" {
+  value = aws_dynamodb_table.results.stream_arn
+}
+```
+
+### Role under S3-as-result-delivery (ADR-0011 / ADR-0012)
+
+The original framing of this ADR placed DynamoDB as the read path for results: items would be polled by `GetItem(document_id)` from a future endpoint, which is why the schema is so deliberate about keeping items single-digit-KB and read-cheap. ADR-0011 changed the read path: consumers now read S3 result objects, not DynamoDB. That is worth recording explicitly, because the read-cost reasoning in this ADR no longer matters at the consumption boundary.
+
+What does still hold:
+
+- **The extractor's hot path is unchanged.** One conditional `PutItem` + one conditional `UpdateItem`. No second hop in the synchronous flow. The DDB → S3 hop is asynchronous, owned by the results module, and out of the extractor's failure surface.
+- **The idempotency contract is unchanged.** Stable PK + conditional writes + status-state-machine guard still give exactly-once semantics on top of at-least-once SQS delivery. The publisher inherits this property—a redelivered stream record writes the same bytes to the same S3 key.
+- **The item shape is unchanged.** No `client_id`, no GSI. The results publisher projects the `NEW_IMAGE` into the result payload as-is (minus `ttl`).
+
+What changes:
+
+- **DynamoDB is no longer authoritative at the consumption boundary.** Consumers and Athena read S3. DynamoDB remains the system of record for the idempotency claim and the Stream source.
+- **The "no dual-write" property is preserved but the responsibility moves.** The extractor still does exactly one DDB write per terminal transition. The S3 write happens in a separate process (the publisher Lambda) consuming the Stream—it is asynchronous, retried independently, and has its own DLQ. The pipeline is dual-store but not dual-write in the failure-mode sense that "no dual-write" was meant to avoid.
+- **TTL becomes a real lever.** With S3 holding the durable record, the DDB row's job ends once the Stream has shipped it. Setting `ttl` on terminal writes (e.g. 30 days past `completed_at`) would let the table become a transient claim store rather than a permanent record. Not used at MVP—keeping rows lets a future operator query DDB if the analytics path is offline—but the lever is available without a schema change.
 
 ## Consequences
 
 Positive:
 
-- Predictable, single-digit-KB items. Polling stays single-GetItem and cheap regardless of document length.
+- Predictable, single-digit-KB items. Keeps the extractor's write path cheap and the Stream payload small regardless of document length; the read-cost argument that motivated this originally is retired now that consumers read S3 (see "Role under S3-as-result-delivery").
 - The PK is a deliberate contributor to idempotency, not an incidental choice—pairing it with the extractor's conditional writes gives end-to-end exactly-once semantics on top of at-least-once delivery.
 - The extractor's write path is one DDB call, no dual-write coordination with S3.
 - Encryption posture is consistent with the storage module's, and the migration story to CMKs is symmetric.
-- Streams remain a free option to enable later without a table rebuild.
+- Streams are enabled (`NEW_IMAGE`), making the table the egress source for the results publisher (ADR-0012) without enlarging the extractor's failure surface or hot-path call count.
 
 Negative:
 
@@ -167,4 +201,4 @@ Neutral:
 - **Store only an S3 pointer in DynamoDB ("DDB as index").** Rejected—forces every read to do `GetItem` + `GetObject` even for the small, bounded answer, and replaces a clean schema with stringly-typed S3 keys. Useful only if the answer itself were unbounded, which it is not.
 - **CMK for the table now.** Deferred—same reasoning as ADR-0004 for the bucket. The right posture for production PII; disproportionate for a portfolio project. The migration is in-place re-encryption, not a copy job, so timing the switch before real data arrives carries no migration cost.
 - **AWS-owned key.** Rejected—strictly dominated by the AWS-managed KMS key in DynamoDB, since the latter is free and gives basic CloudTrail visibility.
-- **Streams enabled now.** Deferred—no consumer today, and enabling later is non-breaking.
+- **Streams enabled now.** Originally deferred on the grounds that no consumer existed. Adopted in this update—the results publisher (ADR-0012) is that consumer, and `NEW_IMAGE` is the projection it needs.

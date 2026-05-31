@@ -12,6 +12,8 @@ A benchmark on the [Kleister NDA](https://github.com/applicaai/kleister-nda) cor
 
 The infrastructure must solve four constraints the library does not address: absorbing arbitrary document uploads without proxying large payloads through compute, decoupling the synchronous client interaction from the slow LLM call, making extraction retryable without re-running the upload, and fitting heavier ML and LLM dependencies into a Lambda execution environment.
 
+The infrastructure is designed as a deployable template—one instance per (caller, document type) pair—rather than a multi-tenant platform that routes by document type. The reasoning behind that choice, and what it implies for IAM, schema shape, and result delivery, is settled in ADR-0013; this ADR assumes it.
+
 ## Decision
 
 Use a fully serverless, event-driven, asynchronous pipeline on AWS:

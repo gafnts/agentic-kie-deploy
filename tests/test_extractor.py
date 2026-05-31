@@ -531,3 +531,66 @@ class TestExtract:
         assert result["token_usage"] == {"input": 10, "output": 20}
         assert isinstance(result["processing_ms"], int)
         assert result["processing_ms"] >= 0
+
+    @pytest.mark.parametrize("code", ["AccessDenied", "NoSuchKey", "InternalError"])
+    def test_s3_client_error_is_translated_to_extraction_error(self, monkeypatch, code):
+        # boto3's ClientError repr embeds account ID + ARNs; the @traceable wrapper would
+        # ship that to LangSmith. We translate at the boundary so only "aws:<Code>" leaves.
+        boto_error = ClientError(
+            {
+                "Error": {
+                    "Code": code,
+                    "Message": (
+                        "User: arn:aws:sts::009160074575:assumed-role/foo is not "
+                        "authorized to perform: s3:GetObject on resource: "
+                        '"arn:aws:s3:::secret-bucket-3984f319e163fa62"'
+                    ),
+                }
+            },
+            "GetObject",
+        )
+        fake_s3 = MagicMock()
+        fake_s3.get_object.side_effect = boto_error
+        monkeypatch.setattr(handler, "_s3_client", lambda: fake_s3)
+
+        with pytest.raises(handler.ExtractionError) as excinfo:
+            handler.extract("bucket-x", "key-y", "doc-1")
+
+        assert str(excinfo.value) == f"aws:{code}"
+        # `raise ... from None` drops __cause__ so the boto repr doesn't ride along.
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__suppress_context__ is True
+
+    def test_non_client_error_propagates_unchanged(self, monkeypatch):
+        # Only ClientError carries AWS identifiers in its message; other failures stay raw
+        # so library detail (e.g. PDFLoader / Gemini errors) remains visible in the trace.
+        body = MagicMock(read=MagicMock(return_value=b"pdf-bytes"))
+        fake_s3 = MagicMock()
+        fake_s3.get_object.return_value = {"Body": body}
+        monkeypatch.setattr(handler, "_s3_client", lambda: fake_s3)
+
+        fake_loader = MagicMock()
+        fake_loader.load_bytes.side_effect = RuntimeError("pdf parse failed")
+        monkeypatch.setattr(handler, "PDFLoader", MagicMock(return_value=fake_loader))
+
+        with pytest.raises(RuntimeError, match="pdf parse failed"):
+            handler.extract("bucket-x", "key-y", "doc-1")
+
+
+class TestRedactInputs:
+    def test_keeps_only_document_id(self):
+        redacted = handler._redact_inputs(
+            {
+                "bucket": "agentic-kie-deploy-local-ingestion-3984f319e163fa62",
+                "key": "uploads/2026/05/17/aaaa",
+                "document_id": "doc-1",
+            }
+        )
+        assert redacted == {"document_id": "doc-1"}
+
+    def test_missing_document_id_yields_none(self):
+        # Defensive: never raise from a process_inputs hook; @traceable would surface it
+        # as a tracing error and the call wouldn't run.
+        assert handler._redact_inputs({"bucket": "b", "key": "k"}) == {
+            "document_id": None
+        }

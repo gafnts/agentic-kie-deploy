@@ -235,7 +235,7 @@ Neutral:
 
 - **Module in the main service stack with targeted bootstrap apply.** Rejected—coupling a build-time durable to deploy-time state means every service plan re-evaluates the repository, and the targeted-apply step is a recurring papercut for new environments and new contributors.
 - **Terraform-driven Docker push of a placeholder image.** Rejected—places Docker on every Terraform runner, makes plans opaque, and trades a one-time setup quirk for permanent operational complexity.
-- **Tag-based image pinning instead of digest.** Rejected—strictly weaker than digest pinning and requires `IMMUTABLE` repository policy as a load-bearing safety check rather than a defense-in-depth one.
+- **Tag-based image pinning instead of digest.** Rejected—strictly weaker than digest pinning and requires `IMMUTABLE` repository policy as the primary safety check rather than a defense-in-depth one.
 - **Mutable `${env}-latest` tag with Lambda update on every push.** Rejected—incompatible with `IMMUTABLE`, loses replay determinism, and conflates "the image we pushed" with "the image deployed."
 - **Enhanced scanning via Inspector.** Deferred—the right answer at production scale, but its account-wide configuration model does not fit a per-env registry stack and the per-image cost is disproportionate for portfolio scale. Re-evaluate when this project moves beyond portfolio status.
 - **CMK encryption on the repository.** Deferred—same reasoning as ADR-0004 and ADR-0007. Re-evaluate before real PII enters the build pipeline (e.g. fixtures, baked-in test data).

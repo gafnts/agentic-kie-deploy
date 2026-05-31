@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted (2026-05-01)
+Accepted (2026-05-01). **Superseded by ADR-0011 (2026-05-24).**
+
+The deferral recorded below held for the integration model assumed at the time—a caller whose runtime, transport, and consumption pattern were all unspecified. Once the integration model was settled as server-to-server AWS-native, S3 result objects with `s3:ObjectCreated:*` notifications became the right answer instead of a polling endpoint, and the webhook and WebSocket alternatives listed below were rejected for the same reason. ADR-0011 is authoritative on result delivery; the reasoning here remains as the historical record of why the deferral made sense under the prior constraints.
 
 ## Context
 

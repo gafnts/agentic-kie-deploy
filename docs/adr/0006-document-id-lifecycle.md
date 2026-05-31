@@ -20,15 +20,17 @@ uploads/{yyyy}/{mm}/{dd}/{document_id}
 
 Because the presigned URL pins the exact object key, the client cannot rewrite the upload to a different ID. From that point on the ID rides the existing event flow:
 
-| Stage                    | How `document_id` is available                            |
-| ------------------------ | --------------------------------------------------------- |
-| Presigner → client       | Returned in the presign response body                     |
-| Client → S3              | PUT goes to the key the URL was signed for                |
-| S3 → EventBridge         | `Object Created` event includes `object.key`              |
-| EventBridge → SQS        | Event payload forwarded verbatim                          |
-| SQS → Extractor          | Lambda parses `document_id` out of `s3.object.key`        |
-| Extractor → DynamoDB     | `PutItem` with PK = `document_id`                         |
-| Future poller → DynamoDB | `GetItem(document_id)` using the ID returned at presign   |
+| Stage                       | How `document_id` is available                                               |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| Presigner → client          | Returned in the presign response body                                        |
+| Client → S3                 | PUT goes to the key the URL was signed for                                   |
+| S3 → EventBridge            | `Object Created` event includes `object.key`                                 |
+| EventBridge → SQS           | Event payload forwarded verbatim                                             |
+| SQS → Extractor             | Lambda parses `document_id` out of `s3.object.key`                           |
+| Extractor → DynamoDB        | `PutItem` with PK = `document_id`                                            |
+| DynamoDB Stream → Publisher | `NEW_IMAGE` carries `document_id`; publisher composes the result key from it |
+| Publisher → Analytics S3    | `PutObject` at `extractions/{yyyy}/{mm}/{dd}/{document_id}.json`             |
+| Consumer → Analytics S3     | `GetObject` at the same address, using the ID returned at presign            |
 
 UUIDv7 is preferred over UUIDv4 because it is time-sortable; if a GSI on creation order is ever added, the partition key sorts naturally without a separate timestamp attribute.
 
@@ -52,7 +54,7 @@ Positive:
 - One identifier, generated once, carried by infrastructure the pipeline already has. No registry, no sidecar metadata, no extra hop.
 - The presigned URL pinning the object key makes "server-controlled ID, client-untrusted" enforceable at the S3 layer rather than at application logic.
 - UUIDv7's time-ordering keeps a future creation-order GSI cheap.
-- A single correlation ID across CloudWatch logs, X-Ray traces, S3 keys, SQS messages, and the DynamoDB row makes debugging tractable.
+- A single correlation ID across CloudWatch logs, X-Ray traces, the ingestion S3 key, SQS messages, the DynamoDB row, the analytics S3 result object, and any consumer-side workflow execution makes debugging tractable. The same `document_id` that the caller receives at presign is what it uses to subscribe to the result address (ADR-0011) — the ID is the address.
 
 Negative:
 

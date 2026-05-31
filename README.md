@@ -10,12 +10,13 @@
 
 ---
 
-<p align="center">A client uploads a document to S3 and receives structured fields asynchronously. The pipeline is fully serverless, event-driven, and Terraform-provisioned on AWS.</p>
+<p align="center">An AWS-native caller uploads a document and consumes the structured result from a known S3 address. The pipeline is fully serverless, event-driven, and Terraform-provisioned on AWS.</p>
 
 ## Contents
 
 - [Architecture](#architecture)
 - [Modules](#modules)
+  - [Uploader](#uploader)
   - [Bucket](#bucket)
   - [Queue](#queue)
   - [Table](#table)
@@ -28,33 +29,59 @@
 
 ## Architecture
 
-The pipeline is fully asynchronous. A client calls a small presigner Lambda behind an API Gateway HTTP endpoint, which returns a short-lived pre-signed S3 PUT URL. The client uploads the document directly to S3, bypassing API Gateway payload limits entirely. The bucket emits an `Object Created` event to EventBridge, which routes it to an SQS queue with a dead-letter queue and redrive policy for resilience. SQS then triggers the extractor Lambda, packaged as a container image from ECR to accommodate heavy LLM dependencies. The extractor runs the [`agentic-kie`](https://github.com/gafnts/agentic-kie) library against the document and writes the resulting structured record to a DynamoDB table keyed by document ID.
+The pipeline is fully asynchronous and end-to-end AWS-native. An in-account caller signs a `POST /uploads` request with SigV4 against the uploader's API Gateway HTTP API (authorized via `AWS_IAM`); the presigner Lambda mints a UUIDv7 `document_id` and returns it alongside a short-lived pre-signed S3 PUT URL. The caller uploads the document directly to the ingestion bucket, bypassing API Gateway payload limits. The bucket emits an `Object Created` event to EventBridge, which routes it to an SQS queue (with a dead-letter queue and redrive policy) that triggers the extractor Lambda—packaged as a container image from ECR to accommodate heavy LLM dependencies.
+
+The extractor runs the [`agentic-kie`](https://github.com/gafnts/agentic-kie) library and conditionally writes the structured record to a DynamoDB table keyed by `document_id`. The terminal write fans out through DynamoDB Streams to a small publisher Lambda, which writes the result payload as JSON to a separate analytics bucket at an address the caller already learned at presign time. The caller's `s3:ObjectCreated:*` subscription on that prefix fires the moment the object lands; the same objects back a Glue catalog table queried through a dedicated Athena workgroup. Each deployed instance serves exactly one caller and one document type—multi-document support is many instances, not one shared pipeline.
 
 ![architecture](./docs/architecture.png)
 
 | Component | Service | Role |
 |---|---|---|
-| Presigner | Lambda + API Gateway | Issues short-lived pre-signed PUT URLs to clients |
-| Ingestion bucket | S3 | Receives uploads directly from clients, emits Object Created events |
+| Uploader API | API Gateway HTTP API (`AWS_IAM`) | Authorizes SigV4-signed `POST /uploads` from in-account callers |
+| Presigner | Lambda (zip) | Mints `document_id` (UUIDv7) and returns a short-lived pre-signed PUT URL |
+| Ingestion bucket | S3 | Receives uploads directly from callers, emits Object Created events |
 | Event router | EventBridge | Routes bucket events to the extraction queue |
 | Queue | SQS + DLQ | Buffers events, retries on failure, isolates bad messages |
 | Extractor | Lambda (container image) | Runs the agentic LLM extraction loop |
-| Store | DynamoDB | Holds structured results, keyed by document ID |
+| Results table | DynamoDB (+ Streams) | Holds the canonical extraction row, keyed by `document_id` |
+| Result publisher | Lambda (zip) | Consumes Streams, writes terminal results to the analytics bucket |
+| Analytics bucket | S3 | Holds result objects; the caller subscribes to its `s3:ObjectCreated:*` events |
+| Catalog | Glue table + Athena workgroup | Ad-hoc query layer over the analytics partition |
 
 ---
 
 ## Modules
 
-The infrastructure is organized as small, per-concern Terraform modules wired together at the root in [infra/main.tf](infra/main.tf).
+The infrastructure is organized as small, per-concern Terraform modules wired together at the root in [infra/main.tf](infra/main.tf). The order below mirrors the data flow.
 
 | Module | Path | Status |
 |---|---|---|
+| `uploader` | [infra/modules/uploader/](infra/modules/uploader/) | Implemented |
 | `bucket` | [infra/modules/bucket/](infra/modules/bucket/) | Implemented |
 | `queue` | [infra/modules/queue/](infra/modules/queue/) | Implemented |
-| `table` | [infra/modules/table/](infra/modules/table/) | Implemented |
 | `extractor` | [infra/modules/extractor/](infra/modules/extractor/) | Implemented |
+| `table` | [infra/modules/table/](infra/modules/table/) | Implemented |
+| `results` | [infra/modules/results/](infra/modules/results/) | Planned |
 | `alarms` | [infra/modules/alarms/](infra/modules/alarms/) | Implemented |
-| `uploader` | [infra/modules/uploader/](infra/modules/uploader/) | Planned |
+
+### Uploader
+
+The uploader is the pipeline's front door. An in-account caller signs `POST /uploads` with SigV4 against an API Gateway HTTP API authorized via `AWS_IAM`; the presigner Lambda mints a UUIDv7 `document_id`, composes the `uploads/{yyyy}/{mm}/{dd}/{document_id}` key ([ADR-0006](docs/adr/0006-document-id-lifecycle.md)), and returns the ID alongside a short-lived pre-signed S3 PUT URL. The caller uploads directly to the ingestion bucket, bypassing API Gateway payload limits. See [ADR-0010](docs/adr/0010-uploader-module.md) for the full reasoning.
+
+| Lever | Value | What it controls |
+|---|---|---|
+| API flavor | API Gateway HTTP API | Cheaper per request and lower latency than REST API; the feature delta (no usage plans, no request validators) does not bite an internal AWS-native caller |
+| Authorizer | `AWS_IAM` on `POST /uploads` | Caller signs with the IAM role it already has—no API keys to rotate, no JWT issuer to operate—and the principal ARN lands in CloudTrail by default |
+| URL TTL | 600s (tfvar `url_ttl_seconds`, 60–3600 range) | Long enough for retries and slow networks; short enough that a leaked URL is useless within an hour |
+| Packaging | Python 3.13, zip | `boto3` + one signing call—the container-image cold-start tax ([ADR-0008](docs/adr/0008-ecr-registry-stack-and-digest-pinned-images.md)/[0009](docs/adr/0009-extractor-lambda.md)) is unjustified here |
+| Timeout / memory | 5s / 256MB | One `generate_presigned_url` call; larger memory does not reduce wall-clock |
+| Architecture | `arm64` | Same cost reasoning as the extractor; the build is a zip on the right architecture |
+| Execution IAM | `s3:PutObject` scoped to `${ingestion_bucket}/uploads/*` | The signed URL inherits the role's grant, so the role must hold the action it grants. Prefix-scoped so a misuse cannot sign URLs for the analytics partition introduced by [ADR-0012](docs/adr/0012-results-module.md) |
+| Access logs | API Gateway → CloudWatch (JSON) | `requestId`, source IP, route, status, response length, latency on every request—available without instrumenting the Lambda |
+| Concurrency | No reserved or maximum | The presign call is cheap and API Gateway already rate-limits; there is no fan-out to bound (alarms cover throttles at the account ceiling) |
+
+> [!NOTE]
+> The route is open to any in-account principal holding `execute-api:Invoke` on the route ARN. The account boundary is the outer perimeter; the extractor's document-type coupling ([ADR-0013](docs/adr/0013-single-tenant-deployment-model.md)) is the inner one. If a future environment cannot rely on the account boundary, the hardening lever is a Lambda authorizer that allowlists principal ARNs—see [ADR-0010](docs/adr/0010-uploader-module.md)'s alternatives section.
 
 ### Bucket
 
@@ -119,19 +146,19 @@ The results table is the system of record for extractions. The extractor writes 
 Idempotency is split between this module and the extractor: the schema's job is to make retries collide on the same partition key, and the extractor's job is to use conditional writes so a redelivered message cannot clobber a terminal row.
 
 > [!NOTE]
-> The table uses the AWS-managed KMS key, not a customer-managed key. For workloads ingesting real PII (names, dates, jurisdictions in extracted fields), switch to a CMK before real data arrives. DynamoDB re-encrypts items in place when the key changes, so the migration is operational rather than a copy job; the IAM consequence (`kms:Decrypt` and `kms:GenerateDataKey` on every reader and writer) mirrors the bucket-side migration sketched in ADR-0004.
+> The table uses the AWS-managed KMS key, not a customer-managed key. For workloads ingesting real PII (names, dates, jurisdictions in extracted fields), switch to a CMK before real data arrives. DynamoDB re-encrypts items in place when the key changes, so the migration is operational rather than a copy job; the IAM consequence (`kms:Decrypt` and `kms:GenerateDataKey` on every reader and writer) mirrors the bucket-side migration sketched in [ADR-0004](docs/adr/0004-sse-s3-over-sse-kms.md).
 
 ### Extractor
 
-The extractor is a container-image Lambda that consumes the extraction queue, runs the [`agentic-kie`](https://github.com/gafnts/agentic-kie) library against each uploaded document, and writes the structured answer to the results table. It is built on a native arm64 runner, deployed digest-pinned (ADR-0008), and bounded explicitly on the consumer side so an ingestion burst cannot run away with parallel LLM cost. See [ADR-0009](docs/adr/0009-extractor-lambda.md) for the full reasoning.
+The extractor is a container-image Lambda that consumes the extraction queue, runs the [`agentic-kie`](https://github.com/gafnts/agentic-kie) library against each uploaded document, and writes the structured answer to the results table. It is built on a native arm64 runner, deployed digest-pinned ([ADR-0008](docs/adr/0008-ecr-registry-stack-and-digest-pinned-images.md)), and bounded explicitly on the consumer side so an ingestion burst cannot run away with parallel LLM cost. See [ADR-0009](docs/adr/0009-extractor-lambda.md) for the full reasoning.
 
 | Lever | Value | What it controls |
 |---|---|---|
-| Timeout | 120s | 12× the benchmarked single-pass latency (ADR-0001), bounds runaway-invocation cost without truncating provider tail latency |
+| Timeout | 120s | 12× the benchmarked single-pass latency ([ADR-0001](docs/adr/0001-event-driven-serverless-pipeline.md)), bounds runaway-invocation cost without truncating provider tail latency |
 | Memory / `/tmp` | 2048 MB each | Holds the container image + transitive libraries; vCPU allocation scales with memory |
 | Architecture | `arm64` | ~20% cheaper per GB-second on Graviton; native build on `ubuntu-24.04-arm` so no QEMU emulation |
 | `batch_size` | 1 | Per-invocation cost is dominated by the LLM call, so batching does not amortize anything and one-message batches keep the failure model simple |
-| `maximum_concurrency` | 10 (staging/local), 25 (prod) | Caps parallel LLM fan-out under an ingestion burst, closing the deferral ADR-0005 made |
+| `maximum_concurrency` | 10 (staging/local), 25 (prod) | Caps parallel LLM fan-out under an ingestion burst, closing the deferral [ADR-0005](docs/adr/0005-sqs-dlq-retry-topology.md) made |
 | Idempotency | Conditional `PutItem` + status-guarded `UpdateItem` | At-least-once SQS delivery cannot clobber a terminal row; redelivered terminal messages are a no-op |
 | Cold-start | No provisioned concurrency | Async polling model hides the 3–10s container-image cold start from the user |
 | Networking | No VPC | Talks only to AWS APIs and external HTTPS endpoints; no NAT cost, no ENI cold-start penalty |
@@ -140,7 +167,7 @@ The extractor is a container-image Lambda that consumes the extraction queue, ru
 The Lambda holds no encryption story of its own: environment variables are encrypted with the AWS-managed Lambda key, parity with the rest of the data path. Secrets (LLM provider key, LangSmith key) live in Secrets Manager, one per environment, fetched once at cold start.
 
 > [!NOTE]
-> LLM telemetry ships to **LangSmith** (SaaS) at MVP—purpose-built UI, zero infrastructure cost at portfolio scale, OTel-GenAI-compatible migration path to a self-hosted Langfuse or Phoenix when real data lands. See ADR-0009's "Observability" section for the migration boundary.
+> LLM telemetry ships to **LangSmith** (SaaS) at MVP—purpose-built UI, zero infrastructure cost at portfolio scale, OTel-GenAI-compatible migration path to a self-hosted Langfuse or Phoenix when real data lands. See [ADR-0009](docs/adr/0009-extractor-lambda.md)'s "Observability" section for the migration boundary.
 
 ---
 
@@ -157,7 +184,7 @@ The two share a `document_id` correlation key but otherwise have nothing in comm
 
 ### Alarms
 
-The alarms module owns the alerting plane: one SNS topic per environment, plus an optional email subscription, that every CloudWatch alarm in the stack publishes to. Function-level and queue-level alarms live next to the resources they watch (extractor module, queue module) and reference this topic by ARN, so the alerting fan-out is one resource rather than one-per-alarm.
+The alarms module owns the alerting plane: one SNS topic per environment, plus an optional email subscription, that every CloudWatch alarm in the stack publishes to. Function-level and queue-level alarms live next to the resources they watch (uploader module, extractor module, queue module) and reference this topic by ARN, so the alerting fan-out is one resource rather than one-per-alarm.
 
 | Lever | Value | What it controls |
 |---|---|---|
@@ -165,13 +192,15 @@ The alarms module owns the alerting plane: one SNS topic per environment, plus a
 | Email subscription | Optional (`alarm_email` tfvar; null disables) | Local/dev runs without notifications; staging/prod set the address per environment. Subscriptions require manual confirmation from the recipient's inbox before delivery starts |
 | Topic policy | AWS default (account-only publish) | CloudWatch in the same account can publish without an explicit policy; no cross-account fan-out at this scope |
 
-Three CloudWatch alarms cover the operational hot path. All three are 1-of-1 5-minute evaluations, treat missing data as `notBreaching` (idle infrastructure is not a failure), and publish to the topic above on both alarm and OK transitions.
+Five CloudWatch alarms cover the operational hot path. Each is a 1-of-1 5-minute evaluation, treats missing data as `notBreaching` (idle infrastructure is not a failure), and publishes to the topic above on both alarm and OK transitions.
 
 | Alarm | Source | Fires when | Why it matters |
 |---|---|---|---|
-| `${function}-errors` | `AWS/Lambda` `Errors` (Sum) | `> 0` over 5 min | Any unhandled exception. With `maxReceiveCount = 3` on the queue, a single bad document fires this up to three times before it lands in the DLQ—the early-warning signal that the DLQ alarm is the confirmation of |
-| `${function}-throttles` | `AWS/Lambda` `Throttles` (Sum) | `> 0` over 5 min | Invocations rejected because the function hit its `maximum_concurrency` cap. Throttles mean ingestion is exceeding the planned LLM fan-out budget; either the cap is wrong or there's a burst worth investigating |
-| `${dlq}-messages-visible` | `AWS/SQS` `ApproximateNumberOfMessagesVisible` (Max) on the DLQ | `> 0` over 5 min | A message in the DLQ means a document exhausted its three retries. The DLQ is the single source of truth for failed messages (ADR-0005); this alarm is the page on it |
+| `${extractor}-errors` | `AWS/Lambda` `Errors` (Sum) on the extractor | `> 0` over 5 min | Any unhandled exception. With `maxReceiveCount = 3` on the queue, a single bad document fires this up to three times before it lands in the DLQ—the early-warning signal that the DLQ alarm is the confirmation of |
+| `${extractor}-throttles` | `AWS/Lambda` `Throttles` (Sum) on the extractor | `> 0` over 5 min | Invocations rejected because the function hit its `maximum_concurrency` cap. Throttles mean ingestion is exceeding the planned LLM fan-out budget; either the cap is wrong or there's a burst worth investigating |
+| `${presigner}-errors` | `AWS/Lambda` `Errors` (Sum) on the presigner | `> 0` over 5 min | The presigner does one `generate_presigned_url` call—non-zero errors imply an IAM regression or a malformed request that slipped past API Gateway |
+| `${presigner}-throttles` | `AWS/Lambda` `Throttles` (Sum) on the presigner | `> 0` over 5 min | The presigner has no reserved or maximum concurrency ([ADR-0010](docs/adr/0010-uploader-module.md)); throttles imply the account concurrency ceiling is being approached |
+| `${dlq}-messages-visible` | `AWS/SQS` `ApproximateNumberOfMessagesVisible` (Max) on the DLQ | `> 0` over 5 min | A message in the DLQ means a document exhausted its three retries. The DLQ is the single source of truth for failed messages ([ADR-0005](docs/adr/0005-sqs-dlq-retry-topology.md)); this alarm is the page on it |
 
 `IteratorAge` is intentionally not wired—it's a Kinesis/DDB Streams metric, not an SQS-Lambda one. `ConcurrentExecutions` is not wired either; it overlaps the Throttles signal at this scale.
 
