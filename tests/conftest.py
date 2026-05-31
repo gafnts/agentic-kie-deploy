@@ -38,6 +38,11 @@ def uploader_api_endpoint() -> str:
 
 
 @pytest.fixture(scope="session")
+def analytics_bucket() -> str:
+    return _tf_output("analytics_bucket_name")
+
+
+@pytest.fixture(scope="session")
 def boto_session() -> Any:
     return boto3.Session()
 

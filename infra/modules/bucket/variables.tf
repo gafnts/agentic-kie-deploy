@@ -3,6 +3,11 @@ variable "bucket_name" {
   type        = string
 }
 
+variable "environment" {
+  description = "Deployment environment (e.g. staging, prod)"
+  type        = string
+}
+
 variable "allowed_upload_origins" {
   description = "Origins allowed to make cross-origin PUT requests (CORS)"
   type        = list(string)
