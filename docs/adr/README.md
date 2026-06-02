@@ -32,3 +32,4 @@ This directory records the significant architectural decisions made in this proj
 | [0012](0012-results-module.md) | Results module (Streams consumer, analytics bucket, Glue and Athena) | Superseded by ADR-0014 |
 | [0013](0013-single-tenant-deployment-model.md) | Single-tenant deployment model | Accepted |
 | [0014](0014-split-results-module.md) | Split the results module into publisher and analytics | Accepted |
+| [0015](0015-load-testing-strategy.md) | Load-testing strategy | Proposed |
