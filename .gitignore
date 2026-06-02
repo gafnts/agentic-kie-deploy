@@ -213,3 +213,6 @@ infra/iam/iam.tfvars
 infra/modules/*/.build/
 
 .DS_Store
+
+# Local load test documents
+tests/documents/
