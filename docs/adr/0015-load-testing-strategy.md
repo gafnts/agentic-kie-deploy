@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-06-01).
+Accepted (2026-06-01).
 
 ## Context
 
@@ -106,7 +106,7 @@ Upload `t0` is stamped client-side; result-landing time comes from a **server-si
 
 #### Layer C: LLM economics
 
-Already written to every row; the half that makes this a *KIE* pipeline rather than generic plumbing.
+Already written to every row by the extractor (`token_usage`, `processing_ms`); the load test reads this **persisted projection** of the LLM telemetry straight from the table rather than querying LangSmith live—the half that makes this a *KIE* pipeline rather than generic plumbing.
 
 | Metric | Source | Note |
 |---|---|---|
