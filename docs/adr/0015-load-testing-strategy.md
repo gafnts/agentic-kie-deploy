@@ -73,26 +73,25 @@ Three reasons this beats a single held-constant document:
 
 Three layers, mirroring the project's own observability split (CloudWatch operational telemetry vs. LangSmith LLM telemetry, per the README's Observability section) so the rig reads as an extension of the existing model rather than a bolt-on. A run is a *load test* only if it captures all three; capturing just traffic counts is "traffic generation."
 
-#### Layer A—Pipeline dynamics (CloudWatch)
+#### Layer A: Pipeline dynamics (CloudWatch)
 
-The operational plane under pressure, pulled with a single `GetMetricData` over the run window.
+The operational plane under pressure, organized by component—each piece of the pipeline and the vital sign(s) that matter most for it. Collection is three post-run reads: one `GetMetricData` pull for the CloudWatch series, one Logs Insights query for cold-start init durations, and one `DescribeAlarmHistory` read.
 
-| Series | Source | What it answers |
+| Component | Series | What it answers |
 |---|---|---|
-| Queue depth & backlog age | SQS `ApproximateNumberOfMessagesVisible`, `ApproximateAgeOfOldestMessage` (main queue) | The shock-absorber's behavior—peak depth and max age are the burst's headline chart. |
-| DLQ depth | `ApproximateNumberOfMessagesVisible` (both DLQs) | Must stay 0. Any message here is a failed run. |
-| Redelivery | per-record `ApproximateReceiveCount` (already read as `attempt`, [handler.py:217](../../src/extractor/handler.py#L217)) | Confirms SLO 2: ≤ 1 per message → no premature visibility-timeout redelivery. |
-| Extractor concurrency / duration / throttles | `AWS/Lambda` `ConcurrentExecutions`, `Duration` (p50/p90/p99), `Throttles`, `Invocations` | Does it pin at the cap (≤10)? Zero throttles expected—the SQS `maximum_concurrency` paces polling without emitting Lambda throttle errors. |
-| Cold starts | `INIT_START` / `REPORT` `Init Duration` log lines | The container image pays a 3–10s cold start ([ADR-0009](0009-extractor-lambda.md)); count them and correlate to the latency outliers—expect a bimodal burst as the first ~10 envs warm. |
-| Publisher lag | DynamoDB Streams `IteratorAge`, publisher `Duration`/`Errors` | Result delivery keeping up with the terminal-write fan-out. |
-| Front door | API Gateway `Count`, `Latency`, `IntegrationLatency`, `4xx`/`5xx` | Captured to *prove* the presign path is a non-event (200 presigns ≈ 0.4% of the 5,000 RPS account throttle), not because signal is expected there. |
-| DynamoDB | read/write throttles, `SuccessfulRequestLatency` | Should be zero on PAY_PER_REQUEST—but a never-loaded on-demand table taking 200 near-instant writes can brush the 2×-previous-peak adaptive ceiling, so the check is real, not a formality. |
-| Alarm transitions | CloudWatch alarm history over the window | Did the alarms tell the truth? On a passing run, none fire (SLO 5). |
+| **SQS** (main queue) | `ApproximateNumberOfMessagesVisible` (depth), `ApproximateAgeOfOldestMessage` (backlog age) | The shock-absorber's behavior—peak depth is the burst's headline chart; oldest-message age vs. the 720s visibility timeout is the no-redelivery margin (SLO 2). |
+| **SQS** (both DLQs) | `ApproximateNumberOfMessagesVisible` | Must stay 0. Any message here is a failed run (SLO 1). |
+| **Extractor Lambda** | `ConcurrentExecutions` (Maximum), `Throttles`, `Duration` (p50/p90/p99), `Invocations`, `Errors` | Does it pin at the cap (≤10) with zero throttles? That self-pacing *is* SLO 3. `Errors` is the infra-fault tripwire only—an OOM/timeout crash increments it; a clean logical failure does not (caveat below). |
+| **Extractor cold starts** | `Init Duration` from `REPORT` log lines (one Logs Insights query) | The container image's 3–10s cold-start tax ([ADR-0009](0009-extractor-lambda.md)); count + distribution explain the burst's early-latency tail as the first ~10 envs warm. |
+| **Publisher Lambda** | `IteratorAge` (stream lag), `Duration`, `Errors` | Is result delivery keeping up with the terminal-write fan-out? |
+| **API Gateway** (front door) | `Count`, `Latency`, `IntegrationLatency`, `4xx`/`5xx` | Confirms the presign path is the predicted non-event (200 presigns ≈ 0.4% of the 5,000 RPS account throttle). |
+| **DynamoDB** | `WriteThrottleEvents`, `SuccessfulRequestLatency` | Should stay zero/flat on PAY_PER_REQUEST—worth confirming a cold on-demand table doesn't brush its 2×-previous-peak adaptive ceiling under 200 near-instant writes. |
+| **Alarms** | `DescribeAlarmHistory` (one read, not a metric) | Did the alarms tell the truth? One call covers all eight; on a passing run none transition to `ALARM` (SLO 5). |
 
 > [!NOTE]
 > **Lambda `Errors` is not the failure signal.** The handler catches extraction exceptions and returns them as SQS `batchItemFailures` ([handler.py:309](../../src/extractor/handler.py#L309)), which Lambda counts as a *successful* invocation—so a document that exhausts its retries into the DLQ can leave `Errors = 0`. Logical success/failure is read from Layer B (terminal DynamoDB status), not here; `Errors` is retained only as an *unexpected-infra-fault* signal. See Finding 2.
 
-#### Layer B—End-to-end (the user-facing number)
+#### Layer B: End-to-end (the user-facing number)
 
 The SLO metric is upload→result-lands latency—but a single total hides *where* the time goes, and for the burst, where is the finding. The pipeline exposes clean server-side segment boundaries, so we decompose rather than measure one fuzzy total:
 
@@ -105,7 +104,7 @@ The SLO metric is upload→result-lands latency—but a single total hides *wher
 
 Upload `t0` is stamped client-side; result-landing time comes from a **server-side** timestamp (the row's `completed_at` plus measured publish lag, or the S3 object itself)—**not** the poll-observed `LastModified`, which injects up to a full poll-interval of error and is second-granular (20–50% noise against a ~10s processing time). **Throughput** (docs/min completed, and how it plateaus at the cap) rounds out the layer.
 
-#### Layer C—LLM economics
+#### Layer C: LLM economics
 
 Already written to every row; the half that makes this a *KIE* pipeline rather than generic plumbing.
 
@@ -114,7 +113,6 @@ Already written to every row; the half that makes this a *KIE* pipeline rather t
 | Token usage (input/output) per doc | `token_usage` (row) | already recorded |
 | Processing wall-clock per doc | `processing_ms` (row) | already recorded, queue-wait-isolated |
 | Cost/doc → cost/1000 | tokens × Gemini pricing | the cost model |
-| Schema-validation retries | LangSmith | if structured output fails validation and re-asks. **No agent tool calls**—the deployed strategy is `SinglePassExtractor`, one call, no ReAct loop ([ADR-0001](0001-event-driven-serverless-pipeline.md)) |
 
 **The punchline, scoped honestly:** marginal cost and *steady-state* latency are ~entirely the LLM—the AWS data plane (Lambda GB-s, SQS, S3 PUTs, DynamoDB writes) is rounding error at this scale. But under *burst*, end-to-end latency is dominated by **queue wait**, which is the concurrency cap working as designed, not the LLM and not a bottleneck. Stating only the first half would contradict the burst chart.
 
@@ -123,7 +121,7 @@ Already written to every row; the half that makes this a *KIE* pipeline rather t
 A run **passes** when:
 
 1. **Correctness**—200/200 documents reach `succeeded`; zero `failed` rows; both DLQs stay at depth 0.
-2. **No premature redelivery**—the burst drains well inside the 720s visibility timeout (predicted ~200s on staging) and no message is processed more than once (`ApproximateReceiveCount` ≤ 1 for every record).
+2. **No premature redelivery**—the burst drains well inside the 720s visibility timeout (predicted ~200s on staging): `ApproximateAgeOfOldestMessage` stays far under 720s and the queue drains to empty, so no message times out into a redelivery. (A direct `NumberOfMessagesReceived` vs. `NumberOfMessagesSent` ratio is available as a one-line confirm if a sharper number is wanted.)
 3. **Concurrency cap holds**—peak `ConcurrentExecutions` ≤ 10 (staging); zero `Throttles` (the SQS event-source `maximum_concurrency` paces polling without emitting Lambda throttle errors—a prediction to confirm).
 4. **Latency**—*processing* latency p90 within ~1.5× the benchmark (<~15s). *End-to-end* latency: sustained p90 < ~20s (incl. occasional cold start); burst tail bounded by queue position (~200–240s for the last doc on staging)—reported, not failed, since it is the designed buffering behavior.
 5. **Alarms are honest**—on a *passing* run, no alarm fires (errors/throttles/DLQ all stay OK). A spurious alarm is itself a finding.
@@ -144,7 +142,7 @@ A driver under `tests/load/`, marked `load` and deselected by default (mirroring
 - **Corpus prep**—a one-time `make`/fixture step fetches the Kleister NDA train partition via the pinned `kleister-nda-preparation` package into a git-ignored dir, then draws the seeded 200-document sample (fixed order) shared by both scenarios.
 - **Injection**—burst fans presign+PUT of the sampled documents across a thread pool as fast as possible; sustained paces the same uploads at the target rate with light jitter over the window. Both record per-doc `document_id`, source filename, and upload-completion timestamp.
 - **Completion tracking**—poll the analytics bucket (and/or DynamoDB with `ConsistentRead`) per `document_id` to *detect* landing, reusing the smoke test's poll pattern; but read the latency *segments* from server-side timestamps (`created_at`, `processing_ms`, `completed_at`, and the S3 object), not from the poll's wall-clock, per Layer B.
-- **Metric collection**—after the window, a single CloudWatch `GetMetricData` pull for the Layer A series, a scan of the produced rows for the Layer B/C fields (`created_at`/`completed_at`/`processing_ms`/`token_usage`), and a read of alarm history over the window.
+- **Metric collection**—after the window: one CloudWatch `GetMetricData` pull for the Layer A series, one Logs Insights query for extractor cold-start init durations, a scan of the produced rows for the Layer B/C fields (`created_at`/`completed_at`/`processing_ms`/`token_usage`), and one `DescribeAlarmHistory` read over the window.
 - **Reporting**—emit a JSON artifact + a printed summary table (percentiles, peak depth, drain time, cost, pass/fail per SLO).
 - **Cleanup**—delete the run's ingestion objects, DynamoDB rows, and analytics objects in a `finally`, exactly as the smoke tests do.
 - **Invocation**—`make load ENV=staging SCENARIO=burst|sustained`, refusing prod by the same guard `make smoke`/`apply` use.
