@@ -50,18 +50,24 @@ Run against **staging**, never prod. Staging's lower concurrency cap (10 vs. 25)
 
 | Scenario | Definition | What it characterizes |
 |---|---|---|
-| **Burst** | 200 documents uploaded as fast as the client can presign + PUT them (parallel) | The spike / batch-dump worst case. Queue fills near-instantly; this is the real stressor—it exercises concurrency capping, queue depth, visibility-timeout safety, and DLQ behavior under saturation. |
 | **Sustained** | 200 documents at a steady ~0.22 doc/s over 15 minutes | The calm-normal-day baseline. At ~22% of staging capacity the queue never builds; this validates the warm-path happy case and steady-state latency. |
+| **Burst** | 200 documents uploaded as fast as the client can presign + PUT them (parallel) | The spike / batch-dump worst case. Queue fills near-instantly; this is the real stressor—it exercises concurrency capping, queue depth, visibility-timeout safety, and DLQ behavior under saturation. |
 
 These are deliberately a **bracket, not two stress tests**. Burst sits *above* instantaneous capacity (the queue must absorb); sustained sits *below* steady-state capacity (the queue stays near-empty). Together they bound "a normal day plus a bad moment." The sustained run is boring by design—it is the floor, and confirming it is uneventful *is* the result. We explicitly accept that sustained-at-200/15min does not find a limit; finding the limit (a ramp-to-knee test) is out of scope here and recorded as a follow-up.
 
-### Corpus: one document, held constant (v1)
+### Corpus: a fixed, seeded sample from the Kleister NDA train partition
 
-Re-upload the existing [tests/static/smoke_document.pdf](../../tests/static/smoke_document.pdf) 200 times per scenario. Each upload mints a fresh `document_id`, so the runs produce 200 distinct extractions with no idempotency collapse. Holding the document constant makes this a **controlled experiment**: document size—and therefore per-document latency and token count—is fixed, so the only independent variable is the arrival pattern, which is exactly what we are studying. A varied corpus (e.g. the Kleister NDA dev partition) would add ecological realism in the latency distribution but confounds the system-behavior signal with document-size variance; it is recorded as a follow-up, not v1.
+Sample 200 documents from the **Kleister NDA train partition**—materialized via the [`kleister-nda-preparation`](https://github.com/gafnts/kleister-nda-preparation) package—and reuse that exact sample, in the same order, across both scenarios. Each upload still mints a fresh `document_id`, so the runs produce 200 distinct extractions with no idempotency collapse.
 
-### Fidelity: real LLM calls, no stub
+Three reasons this beats a single held-constant document:
 
-Run against the real Gemini Tier 1 endpoint. A stubbed/synthetic extractor would let us test infrastructure behavior without LLM cost or quota, and is the right tool for a *resilience* test—but it cannot answer the stated question ("how does the **real** system behave on a real day"), and at this N the real-call cost is negligible: ~200 docs × $0.007 ≈ **$1.40 per scenario**, ~$2.80 for both, plus pennies of Lambda/DynamoDB/S3. The stub path is recorded as the right approach for a future *provider-independent* resilience suite, not for this characterization.
+- **It matches the goal.** The objective is "how does the system behave on a normal day," and a normal day is documents of *varying* size and complexity. A real corpus produces a realistic latency and token distribution; the spread becomes a measured output (Layers B/C), not a fixed point a single document can never show.
+- **Continuity with the quality benchmark.** ADR-0001's F1/cost/latency numbers (~91.5% / ~$0.007 / <10s) were measured on this same Kleister corpus, so the load test's per-document economics are directly comparable to the benchmark's rather than a separate regime.
+- **Train, not dev/test, on purpose.** The benchmark uses the dev partition; reserving dev and test for quality evaluation and drawing load from train keeps the eval partitions uncontaminated as a measurement surface. Train is also larger than N=200, so we sample 200 *distinct* documents without replacement.
+
+**Preserving the controlled-experiment property.** Varying the corpus *and* the arrival pattern at once would change two variables—the confound that made a single document tempting. The fix is to **freeze the sample with a fixed seed and use the identical 200 documents, in the same upload order, for both burst and sustained.** The corpus is then held constant *across* scenarios while varying *within* one: arrival pattern stays the only thing that differs between the two runs, and—better—each document can be paired across runs (same doc, burst vs. sustained) to isolate its queue-wait term cleanly.
+
+**Sourcing.** The corpus is *not* committed—PDFs would bloat the repo and trip the `check for added large files` hook. A prep step fetches the train partition via the pinned `kleister-nda-preparation` package into a git-ignored directory under `tests/`, so runs are reproducible (pinned package + fixed seed) without versioning the documents. The realized token/size distribution is sanity-checked against the extractor's 120s timeout and the 4M Tier-1 TPM ceiling before a run—a corpus of unusually long NDAs is the one input that could approach either.
 
 ### What we measure
 
@@ -135,7 +141,8 @@ If reality diverges from these, the divergence is the finding.
 
 A driver under `tests/load/`, marked `load` and deselected by default (mirroring how `integration` smoke tests are gated), reusing the terraform-output fixtures from [tests/conftest.py](../../tests/conftest.py):
 
-- **Injection**—burst fans presign+PUT across a thread pool as fast as possible; sustained paces uploads at the target rate with light jitter over the window. Both record per-doc `document_id` and upload-completion timestamp.
+- **Corpus prep**—a one-time `make`/fixture step fetches the Kleister NDA train partition via the pinned `kleister-nda-preparation` package into a git-ignored dir, then draws the seeded 200-document sample (fixed order) shared by both scenarios.
+- **Injection**—burst fans presign+PUT of the sampled documents across a thread pool as fast as possible; sustained paces the same uploads at the target rate with light jitter over the window. Both record per-doc `document_id`, source filename, and upload-completion timestamp.
 - **Completion tracking**—poll the analytics bucket (and/or DynamoDB with `ConsistentRead`) per `document_id` to *detect* landing, reusing the smoke test's poll pattern; but read the latency *segments* from server-side timestamps (`created_at`, `processing_ms`, `completed_at`, and the S3 object), not from the poll's wall-clock, per Layer B.
 - **Metric collection**—after the window, a single CloudWatch `GetMetricData` pull for the Layer A series, a scan of the produced rows for the Layer B/C fields (`created_at`/`completed_at`/`processing_ms`/`token_usage`), and a read of alarm history over the window.
 - **Reporting**—emit a JSON artifact + a printed summary table (percentiles, peak depth, drain time, cost, pass/fail per SLO).
@@ -154,7 +161,7 @@ Positive:
 Negative:
 
 - Real LLM spend (~$2.80 for both scenarios) and real writes to staging that must be cleaned up; a crashed run can leave orphaned objects/rows the cleanup must be robust against.
-- Same-document corpus yields a single-point latency distribution—realistic latency *spread* is deferred to the varied-corpus follow-up.
+- The harness gains a corpus dependency: the `kleister-nda-preparation` package, a fetch/prep step, and a git-ignored corpus directory that must be materialized before a run. Reproducibility now rests on pinning the package version and the sample seed.
 - The sustained scenario, by design, does not find a throughput limit; locating the knee needs the deferred ramp test.
 
 Neutral:
@@ -171,9 +178,9 @@ Neutral:
 
 ## Alternatives considered
 
-- **Stubbed / synthetic extractor (no LLM call).** The right tool for a *provider-independent resilience* test—it isolates infrastructure behavior with zero LLM cost or quota exposure, and would let us push far past 200. Rejected *for this exercise* because the stated goal is the behavior of the real system on a real day, and at N=200 the real-call cost is trivial. Recorded as the intended approach for a future resilience suite.
+- **Stubbed / synthetic extractor (no LLM call).** The right tool for a *provider-independent resilience* test—it isolates infrastructure behavior with zero LLM cost or quota exposure, and would let us push far past 200. Rejected *for this exercise* because the stated goal is the behavior of the **real** system on a real day, and at N=200 the real-call cost is negligible (~200 × $0.007 ≈ $1.40/scenario, ~$2.80 for both, plus pennies of Lambda/DynamoDB/S3). Recorded as the intended approach for a future provider-independent resilience suite.
 - **Direct `put_object` into the ingestion bucket (skip the presigner).** Simpler injection, and sufficient if only the extraction half were under test. Rejected: it omits the front door a real caller drives, undercutting the "real traffic" goal. The front door is cheap to include and worth validating.
-- **Varied corpus (Kleister NDA dev partition).** Gives a realistic latency spread. Deferred to a follow-up: it confounds the arrival-pattern signal with document-size variance, and v1 wants the controlled experiment. Also requires sourcing documents not in the repo.
+- **Single document held constant (×200).** The cleanest controlled experiment—fixed document size makes arrival pattern the only variable, with zero sourcing. Rejected: it cannot produce a realistic latency/token distribution, so it answers "how does the pipeline behave" but not the stated "how does it behave on a normal day." The seeded-sample-reused-across-scenarios design (above) recovers most of that rigor—corpus constant across scenarios—while restoring ecological realism within each run.
 - **Test prod for "real" numbers.** Rejected: staging is the safe, conservative read (lower cap → more visible queueing), and prod carries deletion protection and the live alarm fan-out. Prod deltas are annotated in the report instead.
 - **Free tier, run as-is.** Rejected once Tier 1 was enabled. On the free tier the run would have measured Google's 429 limiter as much as our pipeline (see Finding 1); Tier 1 removes the artificial ceiling for ~the same per-token cost.
 - **Ramp-to-knee (step load until the queue grows unboundedly).** The test that actually locates the throughput limit. Out of scope here—this ADR brackets normal-day behavior; the knee is a separate, follow-up exercise.
