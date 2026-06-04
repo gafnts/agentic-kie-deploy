@@ -32,7 +32,7 @@ variable "extractor_image_digest" {
 variable "llm_model" {
   description = "LLM identifier passed to the extractor Lambda."
   type        = string
-  default     = "gemini-3.5-flash"
+  default     = "gemini-3-flash-preview"
 }
 
 variable "alarm_email" {
