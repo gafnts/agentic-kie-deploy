@@ -1,10 +1,18 @@
 """
 Fixtures for the load harness (ADR-0015).
 
-Reuses the root ``tests/conftest.py`` outputs (buckets, table, API endpoint,
-boto session) and adds the few identifiers the harness needs on top: the main
-queue URL for the live sampler, the extractor function name, and the resolved
-environment with a runtime prod guard.
+Reads the deployed infrastructure's real identifiers from Terraform, refuses
+to run if that infrastructure is prod, and hands the measurement layer a single
+``Targets`` bundle to work from.
+
+Most identifiers (buckets, table, API endpoint, boto session) come from the
+root ``tests/conftest.py``; this file adds the harness-only ones on top: the
+main queue URL for the live sampler, the extractor and publisher function
+names, and the DLQ and log-group identifiers.
+
+Is worth noting that the prod guard resolves the environment from the live
+backend rather than the ``ENV`` variable the Makefile checks, so it protects
+prod no matter how the run was invoked.
 """
 
 import re
