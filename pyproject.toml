@@ -54,8 +54,10 @@ overrides = [
 [tool.pytest]
 ini_options.testpaths = [ "tests" ]
 ini_options.pythonpath = [ "src/extractor" ]
+ini_options.norecursedirs = [ "tests/load" ]
 ini_options.markers = [
   "integration: requires API keys and network access (deselected by default)",
+  "load: load test against deployed staging; spends real money (deselected by default)",
 ]
 ini_options.addopts = "-m 'not integration'"
 ini_options.timeout = 120
