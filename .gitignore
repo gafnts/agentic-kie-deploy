@@ -214,8 +214,8 @@ infra/modules/*/.build/
 
 .DS_Store
 
-# Local load test documents
-tests/documents/
+# Load test corpus (materialized via `uv run nda --output_dir tests/load/documents`)
+tests/load/documents/
 
 # Load test run artifacts
 tests/load/reports/
