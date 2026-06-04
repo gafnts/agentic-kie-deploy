@@ -216,3 +216,6 @@ infra/modules/*/.build/
 
 # Local load test documents
 tests/documents/
+
+# Load test run artifacts
+tests/load/reports/
