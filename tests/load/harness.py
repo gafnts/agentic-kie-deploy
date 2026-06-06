@@ -23,8 +23,30 @@ from typing import Any
 
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
+from tqdm import tqdm
 
 from .corpus import Document
+
+# PROGRESS
+
+
+def _countdown(bar: Any, seconds: float) -> None:
+    """Sleep ``seconds``, counting it down in ``bar``'s postfix so a paced gap
+    reads as a live wait rather than a frozen bar."""
+    remaining = seconds
+    while remaining > 1e-3:
+        bar.set_postfix_str(f"next in {remaining:4.0f}s")
+        step = min(1.0, remaining)
+        time.sleep(step)
+        remaining -= step
+    bar.set_postfix_str("")
+
+
+def sleep_with_progress(seconds: int, desc: str = "settling") -> None:
+    """A fixed wait (e.g. metric propagation) rendered as a 1s-tick countdown."""
+    for _ in tqdm(range(seconds), desc=desc, unit="s", disable=None):
+        time.sleep(1)
+
 
 # INJECTION
 
@@ -78,7 +100,16 @@ def run_burst(
         futures = [
             pool.submit(upload_one, creds, region, api_endpoint, d) for d in docs
         ]
-        return [f.result() for f in concurrent.futures.as_completed(futures)]
+        return [
+            f.result()
+            for f in tqdm(
+                concurrent.futures.as_completed(futures),
+                total=len(docs),
+                desc="upload",
+                unit="doc",
+                disable=None,
+            )
+        ]
 
 
 def run_sustained(
@@ -92,10 +123,13 @@ def run_sustained(
     interval = window_s / len(docs)
     rng = random.Random(0)
     uploads: list[Upload] = []
-    for i, doc in enumerate(docs):
+    bar = tqdm(docs, desc="upload (paced)", unit="doc", disable=None)
+    for i, doc in enumerate(bar):
         uploads.append(upload_one(creds, region, api_endpoint, doc))
         if i < len(docs) - 1:
-            time.sleep(max(0.0, interval + rng.uniform(-interval / 4, interval / 4)))
+            _countdown(
+                bar, max(0.0, interval + rng.uniform(-interval / 4, interval / 4))
+            )
     return uploads
 
 
@@ -239,44 +273,51 @@ def await_completion(
     pending = {u.document_id: u for u in uploads}
     done: dict[str, Result] = {}
     deadline = time.time() + timeout
-    while pending and time.time() < deadline:
-        for doc_id in list(pending):
-            upload = pending[doc_id]
-            item = table.get_item(Key={"document_id": doc_id}, ConsistentRead=True).get(
-                "Item"
-            )
-            status = item.get("status") if item else None
-            if status not in ("succeeded", "failed"):
-                continue
-            if status == "failed":
+    with tqdm(total=len(uploads), desc="completing", unit="doc", disable=None) as bar:
+        while pending and time.time() < deadline:
+            for doc_id in list(pending):
+                upload = pending[doc_id]
+                item = table.get_item(
+                    Key={"document_id": doc_id}, ConsistentRead=True
+                ).get("Item")
+                status = item.get("status") if item else None
+                if status not in ("succeeded", "failed"):
+                    continue
+                if status == "failed":
+                    done[doc_id] = Result(
+                        upload=upload,
+                        status="failed",
+                        created_at=_iso_epoch(item["created_at"]),
+                        error=item.get("error"),
+                    )
+                    del pending[doc_id]
+                    bar.update(1)
+                    continue
+                day = datetime.fromisoformat(item["created_at"])
+                key = f"extractions/{day:%Y/%m/%d}/{doc_id}.json"
+                landed = _landing_time(s3, analytics_bucket, key)
+                if landed is None:
+                    continue  # row done but result not yet published; keep polling
+                usage = item.get("token_usage", {})
                 done[doc_id] = Result(
                     upload=upload,
-                    status="failed",
+                    status="succeeded",
                     created_at=_iso_epoch(item["created_at"]),
-                    error=item.get("error"),
+                    completed_at=_iso_epoch(item["completed_at"]),
+                    processing_ms=int(item["processing_ms"]),
+                    landing=landed.timestamp(),
+                    token_input=int(usage.get("input", 0)),
+                    token_output=int(usage.get("output", 0)),
+                    analytics_key=key,
                 )
                 del pending[doc_id]
-                continue
-            day = datetime.fromisoformat(item["created_at"])
-            key = f"extractions/{day:%Y/%m/%d}/{doc_id}.json"
-            landed = _landing_time(s3, analytics_bucket, key)
-            if landed is None:
-                continue  # row done but result object not yet published; keep polling
-            usage = item.get("token_usage", {})
-            done[doc_id] = Result(
-                upload=upload,
-                status="succeeded",
-                created_at=_iso_epoch(item["created_at"]),
-                completed_at=_iso_epoch(item["completed_at"]),
-                processing_ms=int(item["processing_ms"]),
-                landing=landed.timestamp(),
-                token_input=int(usage.get("input", 0)),
-                token_output=int(usage.get("output", 0)),
-                analytics_key=key,
+                bar.update(1)
+            ok = sum(1 for r in done.values() if r.status == "succeeded")
+            bar.set_postfix_str(
+                f"ok={ok} failed={len(done) - ok} pending={len(pending)}"
             )
-            del pending[doc_id]
-        if pending:
-            time.sleep(interval)
+            if pending:
+                time.sleep(interval)
     for doc_id, upload in pending.items():
         done[doc_id] = Result(upload=upload, status="timeout")
     return [done[u.document_id] for u in uploads]

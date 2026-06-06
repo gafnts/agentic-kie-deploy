@@ -7,11 +7,11 @@ durations, one ``DescribeAlarms``+``DescribeAlarmHistory`` read, plus direct
 ``GetQueueAttributes`` reads of the DLQs and the drained main queue (immediate
 and propagation-free, unlike the CloudWatch series).
 
-Layer C (LLM economics): cost derived from the ``token_usage`` already persisted
-to each row and carried on the :class:`~tests.load.harness.Result`.
-
 Layer B (end-to-end latency) is computed from the results in
 :mod:`tests.load.report`, since it needs no AWS read.
+
+Layer C (LLM economics): cost derived from the ``token_usage`` already persisted
+to each row and carried on the :class:`~tests.load.harness.Result`.
 """
 
 import time

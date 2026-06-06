@@ -1,5 +1,5 @@
 """
-Burst / sustained scenario runs (ADR-0015).
+Burst and sustained scenarios orchestration (ADR-0015).
 
 Drives the real front door end-to-end, captures the live queue/concurrency
 curve, and reads per-document latency segments from server-side timestamps.
@@ -11,7 +11,6 @@ run. ``LOAD_SCENARIO`` selects ``burst`` (default) or ``sustained``.
 """
 
 import os
-import time
 from typing import Any
 
 import pytest
@@ -64,7 +63,7 @@ def test_scenario(
 
         window = measure.window_for(results)
         print(f"settling {settle}s for CloudWatch/Logs propagation...")
-        time.sleep(settle)
+        harness.sleep_with_progress(settle, desc="settling")
         layer_a = measure.collect_layer_a(boto_session, load_targets, window)
         cost = measure.cost_summary(results)
         slos = report.evaluate(results, layer_a, sampler, load_targets, scenario, n)
