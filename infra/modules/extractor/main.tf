@@ -100,14 +100,20 @@ resource "aws_lambda_function" "extractor" {
   }
 
   environment {
-    variables = {
-      LLM_MODEL               = var.llm_model
-      LLM_PROVIDER_SECRET_ARN = var.llm_provider_secret_arn
-      LANGSMITH_SECRET_ARN    = var.langsmith_secret_arn
-      LANGSMITH_PROJECT       = var.langsmith_project
-      RESULTS_TABLE_NAME      = var.results_table_name
-      SQS_MAX_RECEIVE_COUNT   = tostring(var.queue_max_receive_count)
-    }
+    # Single-pass leaves max_iterations null and omits EXTRACTOR_MAX_ITERATIONS
+    # entirely rather than carry a dead var; only Agentic sets it.
+    variables = merge(
+      {
+        LLM_MODEL               = var.llm_model
+        LLM_PROVIDER_SECRET_ARN = var.llm_provider_secret_arn
+        LANGSMITH_SECRET_ARN    = var.langsmith_secret_arn
+        LANGSMITH_PROJECT       = var.langsmith_project
+        RESULTS_TABLE_NAME      = var.results_table_name
+        SQS_MAX_RECEIVE_COUNT   = tostring(var.queue_max_receive_count)
+        EXTRACTOR_FLAVOR        = var.extractor_flavor
+      },
+      var.max_iterations != null ? { EXTRACTOR_MAX_ITERATIONS = tostring(var.max_iterations) } : {}
+    )
   }
 
   tags = {
@@ -134,7 +140,7 @@ resource "aws_lambda_event_source_mapping" "extraction" {
 
 resource "aws_cloudwatch_metric_alarm" "errors" {
   alarm_name          = "${var.function_name}-errors"
-  alarm_description   = "Lambda invocations that ended in an unhandled exception. With maxReceiveCount=3 on the queue, a single bad document fires this up to three times before it lands in the DLQ — the alarm is the early-warning signal that the DLQ alarm is the confirmation of."
+  alarm_description   = "Lambda invocations that ended in an unhandled exception. A single bad document fires this once per delivery attempt before it lands in the DLQ (the alarm is the early-warning signal that the DLQ alarm is the confirmation of)."
   namespace           = "AWS/Lambda"
   metric_name         = "Errors"
   statistic           = "Sum"
