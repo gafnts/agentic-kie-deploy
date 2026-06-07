@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-06-06).
+Accepted (2026-06-07).
 
 ## Context
 
@@ -51,7 +51,7 @@ Every environment—staging and prod alike—can run **either** flavor, selected
 | Knob | Single-pass (today) | Agentic profile | Why it moves |
 |---|---|---|---|
 | `max_iterations` (agent) | n/a | **~30** (down from the library default 50) | The real cost/latency governor—but it caps LangGraph *supersteps* (`recursion_limit`), ≈ 2× the LLM-call count, *not* LLM calls. Offline traces run 5–9 LLM calls (≈ 9–17 supersteps). ~30 clears that ceiling with margin and still caps a runaway at ~15 calls. See Finding A. |
-| `max_retries` (agent) | n/a | **3 (unchanged)** | A *third* retry knob, separate from `maxReceiveCount`: `ModelRetryMiddleware` retries each model call up to 3× with backoff on *transient* errors (429/timeout/overload) inside one invocation. Left at 3, but recorded because it interacts with the 120s timeout (transient retries add wall-clock) and because "fail fast and cheap" applies to *logic* failures, not transient ones. |
+| `max_retries` (agent) | n/a | **3** | A *third* retry knob, separate from `maxReceiveCount`: `ModelRetryMiddleware` retries each model call up to 3× with backoff on *transient* errors (429/timeout/overload) inside one invocation. Left at 3, but recorded because it interacts with the 120s timeout (transient retries add wall-clock) and because "fail fast and cheap" applies to *logic* failures, not transient ones. |
 | `modality` | `text` | `text` | Avoids image-token blow-up; keeps the per-doc TPM draw bounded. Measured single-pass TPM peaked at 0.317M against the 2M ceiling (~6× headroom); even agentic's per-doc input inflation (~2–4×) at ~0.68× throughput stays well under, so Finding 1's coupling holds slack. |
 | Lambda timeout ([main.tf:33](../../infra/main.tf#L33)) | 120s | **120s (unchanged)** | Benchmark mean is 14.6s, and `max_iterations` ~30 (≈ ~15 LLM calls at ~2s each) bounds the worst run to ~30–50s—well under the existing 120s, which already absorbed single-pass's 50s tail. `max_iterations`, not the clock, is the governor; the timeout is a backstop that already has margin. No reason to move it. |
 | Visibility timeout | 720s (= 120×6) | **720s (unchanged)** | Derived as `timeout × 6` ([queue/main.tf:2](../../infra/modules/queue/main.tf#L2)), so it tracks the timeout automatically. The timeout stays at 120s, so this stays at 720s—and at ~330s peak dwell (below, scaling the measured single-pass baseline) that is ~2.2× headroom. The coupling is worth keeping; it just doesn't need to fire here. |
