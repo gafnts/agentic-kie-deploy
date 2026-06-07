@@ -272,12 +272,18 @@ def await_completion(
     s3: Any,
     analytics_bucket: str,
     uploads: list[Upload],
-    timeout: float = 600.0,
+    timeout: float = 900.0,
     interval: float = 5.0,
 ) -> list[Result]:
     """
     Poll each document to a terminal state, then read its latency segments from
     server-side timestamps (row + analytics object), not the poll wall-clock.
+
+    The default timeout (900s) must exceed the SQS visibility timeout (720s) so
+    that a document failing on its first attempt—and thus invisible for 720s before
+    retry—can reach a terminal DynamoDB status ("succeeded" or "failed") before the
+    harness gives up and marks it "timeout". Any "timeout" result fails SLO 1 even
+    when the document eventually resolves correctly on its retry.
     """
     pending = {u.document_id: u for u in uploads}
     done: dict[str, Result] = {}
