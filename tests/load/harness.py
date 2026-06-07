@@ -345,8 +345,21 @@ def cleanup(
     analytics_bucket: str,
     results: list[Result],
 ) -> None:
-    """Delete every ingestion object, row, and analytics object the run created."""
+    """
+    Delete every ingestion object, row, and analytics object the run created.
+
+    Skips documents still marked ``timeout``: those never reached a terminal
+    DynamoDB status, so the extractor may still be draining them from the SQS
+    backlog. Deleting a timeout doc's source object out from under an in-flight
+    retry makes ``s3:GetObject`` return 403 — the extractor role has no
+    ``s3:ListBucket``, so a missing key surfaces as AccessDenied, not NoSuchKey —
+    which lands the message in the DLQ as a phantom failure. Leave their objects
+    and rows in place to finish processing; purge them once the backlog drains.
+    """
+    skipped = [r for r in results if r.status == "timeout"]
     for r in results:
+        if r.status == "timeout":
+            continue
         with contextlib.suppress(Exception):
             s3.delete_object(Bucket=ingestion_bucket, Key=r.upload.key)
         with contextlib.suppress(Exception):
@@ -354,6 +367,12 @@ def cleanup(
         if r.analytics_key:
             with contextlib.suppress(Exception):
                 s3.delete_object(Bucket=analytics_bucket, Key=r.analytics_key)
+    if skipped:
+        print(
+            f"cleanup: left {len(skipped)} timeout doc(s) in place to drain; "
+            "purge manually once the backlog clears: "
+            + ", ".join(r.upload.document_id for r in skipped)
+        )
 
 
 # REPORTING (shot 2: a compact segment summary; full SLO report lands in shot 3)
