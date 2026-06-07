@@ -41,6 +41,9 @@ There is ample headroom; the provider will not throttle these runs. This is wort
 > [!NOTE]
 > **TPM correction (post-run, 2026-06-07).** The deployed model is **Gemini 3 Flash**, whose Tier-1 input-TPM ceiling is **2M, not the 4M** the table above states. The *measured* burst+sustained peak was **0.317M** (~16% of the 2M ceiling), so the conclusion ("not the binding constraint") held with **~6× headroom**—*more* than the table's ~2×, because the pre-run worst-case draw (~1.8M) sat far above the actual 0.317M, more than offsetting the lower-than-assumed ceiling. RPM and RPD held as predicted. The pre-registered estimates are left intact above; this note records the observed values, per the prediction-then-grade methodology.
 
+> [!NOTE]
+> **RPM/RPD ceiling correction (post-run, 2026-06-07).** The table above and the `maximum_concurrency` coupling note that follows it both state the Gemini Tier-1 ceilings as **4,000 RPM** and **~150,000 RPD**; the deployed Gemini 3 Flash key's actual Tier-1 ceilings are **1,000 RPM** and **10,000 RPD**. The *draws* held as predicted (~60 RPM at staging concurrency, ~400/day across both runs), so the conclusion ("not the binding constraint") is unchanged—but against the corrected ceilings the true headroom is **~16× on RPM** (not the tabulated ~65×) and **~25× on RPD** (not ~375×), still ample. As with the TPM note above, the pre-registered estimates are left intact, per the prediction-then-grade methodology; this note records the corrected ceilings.
+
 ## Decision
 
 ### Scope: end-to-end, through the real front door
