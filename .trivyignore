@@ -3,3 +3,7 @@ AVD-DS-0002
 
 # Lambda ignores HEALTHCHECK; runtime lifecycle is managed by AWS.
 AVD-DS-0026
+
+# Go stdlib MIME-header DoS in the arm64 Lambda Python 3.13 base image; fixed upstream but not yet in
+# public.ecr.aws/lambda/python:3.13. Not reachable from our Python handler. Remove once AWS rebases the image.
+CVE-2026-42504
