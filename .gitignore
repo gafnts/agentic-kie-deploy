@@ -217,5 +217,7 @@ infra/modules/*/.build/
 # Load test corpus (materialized via `uv run nda --output_dir tests/load/documents`)
 tests/load/documents/
 
-# Load test run artifacts
-tests/load/reports/
+# Load test run artifacts: ad-hoc runs stay local; curated full-run reports
+# live under reports/baseline/ and are tracked as ADR-0015 evidence.
+tests/load/reports/*
+!tests/load/reports/baseline/
