@@ -132,7 +132,7 @@ def log(outcome: str, **fields: Any) -> None:
 @traceable(name="extract_document", process_inputs=_redact_inputs)
 def extract(bucket: str, key: str, document_id: str) -> dict[str, Any]:
     """
-    Download ``s3://bucket/key``, run single-pass NDA extraction, and return structured results.
+    Download ``s3://bucket/key``, run the deployed flavor's NDA extraction, and return structured results.
 
     Return shape matches the optional attributes in the table schema (ADR-0007)
     so the conditional UPDATE in :func:`complete` works as-is.
