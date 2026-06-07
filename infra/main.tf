@@ -32,6 +32,24 @@ locals {
 
   extractor_timeout_seconds = 120
 
+  # The parameter profile follows extractor_flavor so the whole envelope moves with
+  # the flavor rather than being hand-edited. Only two knobs differ between flavors:
+  # the agent's max_iterations (n/a for single-pass, which has no loop) and the queue's
+  # maxReceiveCount (agentic failures are mostly logic, not transient, so retrying an
+  # expensive doomed run buys nothing). The timeout, visibility timeout, modality, and
+  # concurrency cap hold across both.
+  flavor_profiles = {
+    single_pass = {
+      max_iterations    = null
+      max_receive_count = 3
+    }
+    agentic = {
+      max_iterations    = 30
+      max_receive_count = 2
+    }
+  }
+  flavor_profile = local.flavor_profiles[var.extractor_flavor]
+
   # Partition root for result objects, single-sourced here and threaded into both
   # the publisher (write path) and analytics (Glue/Athena read path) modules.
   results_prefix = "extractions"
@@ -67,6 +85,7 @@ module "queue" {
   name                   = "${var.project_name}-${var.environment}-extraction"
   source_bucket_name     = module.ingestion.bucket_name
   lambda_timeout_seconds = local.extractor_timeout_seconds
+  max_receive_count      = local.flavor_profile.max_receive_count
   alarm_topic_arn        = module.alarms.topic_arn
   environment            = var.environment
 }
@@ -82,6 +101,8 @@ module "extractor" {
   source                  = "./modules/extractor"
   function_name           = "${var.project_name}-${var.environment}-extractor"
   image_uri               = "${data.aws_ecr_repository.extractor.repository_url}@${var.extractor_image_digest}"
+  extractor_flavor        = var.extractor_flavor
+  max_iterations          = local.flavor_profile.max_iterations
   timeout_seconds         = local.extractor_timeout_seconds
   memory_mb               = 2048
   ephemeral_storage_mb    = 2048

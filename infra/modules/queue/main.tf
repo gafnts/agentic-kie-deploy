@@ -129,7 +129,7 @@ resource "aws_sqs_queue_policy" "extraction_dlq" {
 
 resource "aws_cloudwatch_metric_alarm" "dlq_messages_visible" {
   alarm_name          = "${aws_sqs_queue.extraction_dlq.name}-messages-visible"
-  alarm_description   = "Any message in the DLQ means a document exhausted maxReceiveCount=3 retries. The DLQ alarm is the single source of truth for failed messages."
+  alarm_description   = "Any message in the DLQ means a document exhausted its maxReceiveCount retries (3 for single-pass, 2 for agentic). The DLQ alarm is the single source of truth for failed messages."
   namespace           = "AWS/SQS"
   metric_name         = "ApproximateNumberOfMessagesVisible"
   statistic           = "Maximum"

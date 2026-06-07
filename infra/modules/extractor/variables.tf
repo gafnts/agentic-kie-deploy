@@ -12,6 +12,22 @@ variable "image_uri" {
   }
 }
 
+variable "extractor_flavor" {
+  description = "Which agentic-kie strategy the handler builds, passed through as EXTRACTOR_FLAVOR. 'single_pass' or 'agentic'."
+  type        = string
+  default     = "single_pass"
+  validation {
+    condition     = contains(["single_pass", "agentic"], var.extractor_flavor)
+    error_message = "extractor_flavor must be 'single_pass' or 'agentic'."
+  }
+}
+
+variable "max_iterations" {
+  description = "Agentic-only cap on LangGraph supersteps (recursion_limit, ~2x the LLM-call count), passed as EXTRACTOR_MAX_ITERATIONS. Null for single_pass, which has no loop; only emitted to the function env when set."
+  type        = number
+  default     = null
+}
+
 variable "timeout_seconds" {
   description = "Function timeout. The queue's visibility timeout is derived as 6x this value."
   type        = number

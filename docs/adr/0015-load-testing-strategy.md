@@ -38,6 +38,12 @@ There is ample headroom; the provider will not throttle these runs. This is wort
 > [!NOTE]
 > The `maximum_concurrency` cap is implicitly coupled to the provider's RPM budget: a cap that lets the pipeline issue more RPM than the tier allows turns a burst into DLQ'd documents, not buffered ones. At Tier 1 (4,000 RPM) the staging cap (10 → ~60 RPM) and even the prod cap (25 → ~150 RPM) sit far under the ceiling, so the coupling is currently slack. It is not enforced anywhere in code or config—see Finding 1.
 
+> [!NOTE]
+> **TPM correction (post-run, 2026-06-07).** The deployed model is **Gemini 3 Flash**, whose Tier-1 input-TPM ceiling is **2M, not the 4M** the table above states. The *measured* burst+sustained peak was **0.317M** (~16% of the 2M ceiling), so the conclusion ("not the binding constraint") held with **~6× headroom**—*more* than the table's ~2×, because the pre-run worst-case draw (~1.8M) sat far above the actual 0.317M, more than offsetting the lower-than-assumed ceiling. RPM and RPD held as predicted. The pre-registered estimates are left intact above; this note records the observed values, per the prediction-then-grade methodology.
+
+> [!NOTE]
+> **RPM/RPD ceiling correction (post-run, 2026-06-07).** The table above and the `maximum_concurrency` coupling note that follows it both state the Gemini Tier-1 ceilings as **4,000 RPM** and **~150,000 RPD**; the deployed Gemini 3 Flash key's actual Tier-1 ceilings are **1,000 RPM** and **10,000 RPD**. The *draws* held as predicted (~60 RPM at staging concurrency, ~400/day across both runs), so the conclusion ("not the binding constraint") is unchanged—but against the corrected ceilings the true headroom is **~16× on RPM** (not the tabulated ~65×) and **~25× on RPD** (not ~375×), still ample. As with the TPM note above, the pre-registered estimates are left intact, per the prediction-then-grade methodology; this note records the corrected ceilings.
+
 ## Decision
 
 ### Scope: end-to-end, through the real front door
@@ -67,7 +73,7 @@ Three reasons this beats a single held-constant document:
 
 **Preserving the controlled-experiment property.** Varying the corpus *and* the arrival pattern at once would change two variables—the confound that made a single document tempting. The fix is to **freeze the sample with a fixed seed and use the identical 200 documents, in the same upload order, for both burst and sustained.** The corpus is then held constant *across* scenarios while varying *within* one: arrival pattern stays the only thing that differs between the two runs, and—better—each document can be paired across runs (same doc, burst vs. sustained) to isolate its queue-wait term cleanly.
 
-**Sourcing.** The corpus is *not* committed—PDFs would bloat the repo and trip the `check for added large files` hook. A prep step fetches the train partition via the pinned `kleister-nda-preparation` package into a git-ignored directory under `tests/`, so runs are reproducible (pinned package + fixed seed) without versioning the documents. The realized token/size distribution is sanity-checked against the extractor's 120s timeout and the 4M Tier-1 TPM ceiling before a run—a corpus of unusually long NDAs is the one input that could approach either.
+**Sourcing.** The corpus is *not* committed—PDFs would bloat the repo and trip the `check for added large files` hook. A prep step fetches the train partition via the pinned `kleister-nda-preparation` package into a git-ignored directory under `tests/`, so runs are reproducible (pinned package + fixed seed) without versioning the documents. The realized token/size distribution is sanity-checked against the extractor's 120s timeout and the Tier-1 TPM ceiling (2M for the deployed Gemini 3 Flash—corrected post-run; see the provider-budget note above) before a run—a corpus of unusually long NDAs is the one input that could approach either.
 
 ### What we measure
 

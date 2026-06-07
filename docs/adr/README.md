@@ -33,3 +33,4 @@ This directory records the significant architectural decisions made in this proj
 | [0013](0013-single-tenant-deployment-model.md) | Single-tenant deployment model | Accepted |
 | [0014](0014-split-results-module.md) | Split the results module into publisher and analytics | Accepted |
 | [0015](0015-load-testing-strategy.md) | Load-testing strategy | Accepted |
+| [0016](0016-agentic-flavor-deployment.md) | Agentic-flavor deployment | Accepted |

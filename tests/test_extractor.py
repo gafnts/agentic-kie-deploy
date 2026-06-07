@@ -464,6 +464,8 @@ class TestInfrastructureGetters:
 
     def test_extractor_bootstraps_then_builds_single_pass(self, monkeypatch):
         monkeypatch.setenv("LLM_MODEL", "gemini-fake")
+        # Default flavor is single_pass; ensure no stray env flips it.
+        monkeypatch.delenv("EXTRACTOR_FLAVOR", raising=False)
         bootstrap = MagicMock()
         monkeypatch.setattr(handler, "_bootstrap_secrets", bootstrap)
         monkeypatch.setattr(
@@ -474,8 +476,10 @@ class TestInfrastructureGetters:
         fake_extractor_obj = MagicMock()
         model_ctor = MagicMock(return_value=fake_model)
         ext_ctor = MagicMock(return_value=fake_extractor_obj)
+        agentic_ctor = MagicMock()
         monkeypatch.setattr(handler, "ChatGoogleGenerativeAI", model_ctor)
         monkeypatch.setattr(handler, "SinglePassExtractor", ext_ctor)
+        monkeypatch.setattr(handler, "AgenticExtractor", agentic_ctor)
 
         assert handler._extractor() is fake_extractor_obj
         bootstrap.assert_called_once()
@@ -483,6 +487,52 @@ class TestInfrastructureGetters:
             model="gemini-fake", google_api_key="fake-api-key"
         )
         ext_ctor.assert_called_once_with(model=fake_model, schema=NDA)
+        agentic_ctor.assert_not_called()
+
+    def test_extractor_builds_agentic_when_flavor_set(self, monkeypatch):
+        monkeypatch.setenv("LLM_MODEL", "gemini-fake")
+        monkeypatch.setenv("EXTRACTOR_FLAVOR", "agentic")
+        monkeypatch.setenv("EXTRACTOR_MAX_ITERATIONS", "30")
+        bootstrap = MagicMock()
+        monkeypatch.setattr(handler, "_bootstrap_secrets", bootstrap)
+        monkeypatch.setattr(
+            handler, "_llm_api_key", MagicMock(return_value="fake-api-key")
+        )
+
+        fake_model = MagicMock()
+        fake_agentic_obj = MagicMock()
+        model_ctor = MagicMock(return_value=fake_model)
+        single_ctor = MagicMock()
+        agentic_ctor = MagicMock(return_value=fake_agentic_obj)
+        monkeypatch.setattr(handler, "ChatGoogleGenerativeAI", model_ctor)
+        monkeypatch.setattr(handler, "SinglePassExtractor", single_ctor)
+        monkeypatch.setattr(handler, "AgenticExtractor", agentic_ctor)
+
+        assert handler._extractor() is fake_agentic_obj
+        bootstrap.assert_called_once()
+        agentic_ctor.assert_called_once_with(
+            model=fake_model, schema=NDA, modality="text", max_iterations=30
+        )
+        single_ctor.assert_not_called()
+
+    def test_extractor_agentic_defaults_max_iterations_when_env_absent(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("LLM_MODEL", "gemini-fake")
+        monkeypatch.setenv("EXTRACTOR_FLAVOR", "agentic")
+        monkeypatch.delenv("EXTRACTOR_MAX_ITERATIONS", raising=False)
+        monkeypatch.setattr(handler, "_bootstrap_secrets", MagicMock())
+        monkeypatch.setattr(
+            handler, "_llm_api_key", MagicMock(return_value="fake-api-key")
+        )
+        monkeypatch.setattr(
+            handler, "ChatGoogleGenerativeAI", MagicMock(return_value=MagicMock())
+        )
+        agentic_ctor = MagicMock()
+        monkeypatch.setattr(handler, "AgenticExtractor", agentic_ctor)
+
+        handler._extractor()
+        assert agentic_ctor.call_args.kwargs["max_iterations"] == 30
 
     def test_ls_client_bootstraps_then_returns_cached_singleton(self, monkeypatch):
         bootstrap = MagicMock()

@@ -43,6 +43,11 @@ output "results_table_arn" {
   value = module.table.table_arn
 }
 
+output "extractor_flavor" {
+  description = "The deployed extraction strategy. Read by the load harness to make SLO 4 (latency) report rather than gate for the agentic flavor, which is slow by design."
+  value       = var.extractor_flavor
+}
+
 output "extractor_function_name" {
   value = module.extractor.function_name
 }

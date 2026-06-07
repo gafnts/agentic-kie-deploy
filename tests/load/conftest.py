@@ -57,6 +57,15 @@ def extractor_log_group_name() -> str:
 
 
 @pytest.fixture(scope="session")
+def extractor_flavor() -> str:
+    """
+    The deployed extraction strategy (ADR-0016), read from the live stack so the
+    report reflects what was actually deployed rather than an operator claim.
+    """
+    return _tf_output("extractor_flavor")
+
+
+@pytest.fixture(scope="session")
 def load_env(ingestion_bucket: str) -> str:
     """
     Environment parsed from resource naming, refusing prod at runtime.
@@ -82,6 +91,7 @@ def load_targets(
     extractor_function_name: str,
     publisher_function_name: str,
     extractor_log_group_name: str,
+    extractor_flavor: str,
     results_table_name: str,
     uploader_api_endpoint: str,
     analytics_bucket: str,
@@ -104,4 +114,5 @@ def load_targets(
         api_id=urlparse(uploader_api_endpoint).hostname.split(".")[0],  # type: ignore[union-attr]
         analytics_bucket=analytics_bucket,
         ingestion_bucket=ingestion_bucket,
+        flavor=extractor_flavor,
     )

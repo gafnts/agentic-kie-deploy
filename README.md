@@ -3,6 +3,7 @@
   <strong>Serverless, event-driven AWS infrastructure for asynchronous key information extraction with LLMs.</strong>
 </p>
 <p align="center">
+<a href="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/checks.yml"><img src="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/checks.yml/badge.svg" alt="Quality gates"></a>
 <a href="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-staging.yml"><img src="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-staging.yml/badge.svg" alt="Deploy staging"></a>
 <a href="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-prod.yml"><img src="https://github.com/gafnts/agentic-kie-deploy/actions/workflows/deploy-prod.yml/badge.svg" alt="Deploy prod"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
@@ -117,7 +118,7 @@ The extraction queue sits between the ingestion bucket and the extractor Lambda.
 | Lever | Value | What it controls |
 |---|---|---|
 | Visibility timeout | `6 × lambda_timeout_seconds` (computed) | Hides an in-flight message long enough to cover the worst-case extractor run plus handoff jitter, eliminating the most common SQS+Lambda misconfiguration |
-| `maxReceiveCount` | 3 | Bounds retries on transient failures before the message is shunted to the DLQ |
+| `maxReceiveCount` | 3 (single-pass), 2 (agentic) | Bounds retries on transient failures before the message is shunted to the DLQ. Follows `extractor_flavor`: agentic failures are mostly logic (a non-terminating loop), not transient, so retrying an expensive doomed run buys nothing ([ADR-0016](docs/adr/0016-agentic-flavor-deployment.md)) |
 | Long polling | `receive_wait_time_seconds = 20` | Reduces empty receives and smooths Lambda triggering at no extra cost |
 | TLS-only policy | Deny on `aws:SecureTransport = false` (main + DLQ) | Mirrors the bucket's transport posture across the pipeline |
 | Source-scoped send | `aws:SourceArn` condition on `events.amazonaws.com` | Closes the confused-deputy class of misconfigurations on the EventBridge → SQS hop |
@@ -160,6 +161,8 @@ The extractor is a container-image Lambda that consumes the extraction queue, ru
 | Architecture | `arm64` | ~20% cheaper per GB-second on Graviton; native build on `ubuntu-24.04-arm` so no QEMU emulation |
 | `batch_size` | 1 | Per-invocation cost is dominated by the LLM call, so batching does not amortize anything and one-message batches keep the failure model simple |
 | `maximum_concurrency` | 10 (staging/local), 25 (prod) | Caps parallel LLM fan-out under an ingestion burst, closing the deferral [ADR-0005](docs/adr/0005-sqs-dlq-retry-topology.md) made |
+| `extractor_flavor` | `single_pass` (default), `agentic` | Which [`agentic-kie`](https://github.com/gafnts/agentic-kie) strategy the handler builds—one structured call vs. a ReAct loop over the document. Selectable per environment at deploy time; it drives the whole parameter profile (`max_iterations`, `maxReceiveCount`) so flipping a flavor is a one-variable change ([ADR-0016](docs/adr/0016-agentic-flavor-deployment.md)) |
+| `max_iterations` (agentic only) | ~30 | Caps LangGraph supersteps (`recursion_limit`, ≈ 2× the LLM-call count), bounding a non-terminating agent run. `n/a` for single-pass, which has no loop |
 | Idempotency | Conditional `PutItem` + status-guarded `UpdateItem` | At-least-once SQS delivery cannot clobber a terminal row; redelivered terminal messages are a no-op |
 | Cold-start | No provisioned concurrency | Async polling model hides the 3–10s container-image cold start from the user |
 | Networking | No VPC | Talks only to AWS APIs and external HTTPS endpoints; no NAT cost, no ENI cold-start penalty |
@@ -240,11 +243,11 @@ Eight CloudWatch alarms cover the operational hot path. Each is a 1-of-1 5-minut
 
 | Alarm | Source | Fires when | Why it matters |
 |---|---|---|---|
-| `${extractor}-errors` | `AWS/Lambda` `Errors` (Sum) on the extractor | `> 0` over 5 min | Any unhandled exception. With `maxReceiveCount = 3` on the queue, a single bad document fires this up to three times before it lands in the DLQ—the early-warning signal that the DLQ alarm is the confirmation of |
+| `${extractor}-errors` | `AWS/Lambda` `Errors` (Sum) on the extractor | `> 0` over 5 min | Any unhandled exception. A single bad document fires this once per delivery attempt (up to the queue's `maxReceiveCount`—3 for single-pass, 2 for agentic) before it lands in the DLQ—the early-warning signal that the DLQ alarm is the confirmation of |
 | `${extractor}-throttles` | `AWS/Lambda` `Throttles` (Sum) on the extractor | `> 0` over 5 min | Invocations rejected because the function hit its `maximum_concurrency` cap. Throttles mean ingestion is exceeding the planned LLM fan-out budget; either the cap is wrong or there's a burst worth investigating |
 | `${presigner}-errors` | `AWS/Lambda` `Errors` (Sum) on the presigner | `> 0` over 5 min | The presigner does one `generate_presigned_url` call—non-zero errors imply an IAM regression or a malformed request that slipped past API Gateway |
 | `${presigner}-throttles` | `AWS/Lambda` `Throttles` (Sum) on the presigner | `> 0` over 5 min | The presigner has no reserved or maximum concurrency ([ADR-0010](docs/adr/0010-uploader-module.md)); throttles imply the account concurrency ceiling is being approached |
-| `${dlq}-messages-visible` | `AWS/SQS` `ApproximateNumberOfMessagesVisible` (Max) on the DLQ | `> 0` over 5 min | A message in the DLQ means a document exhausted its three retries. The DLQ is the single source of truth for failed messages ([ADR-0005](docs/adr/0005-sqs-dlq-retry-topology.md)); this alarm is the page on it |
+| `${dlq}-messages-visible` | `AWS/SQS` `ApproximateNumberOfMessagesVisible` (Max) on the DLQ | `> 0` over 5 min | A message in the DLQ means a document exhausted its `maxReceiveCount` retries (3 single-pass, 2 agentic). The DLQ is the single source of truth for failed messages ([ADR-0005](docs/adr/0005-sqs-dlq-retry-topology.md)); this alarm is the page on it |
 | `${publisher}-errors` | `AWS/Lambda` `Errors` (Sum) on the publisher | `> 0` over 5 min | An unhandled exception in the Streams consumer. Result objects silently stop reaching S3 while the extractor keeps writing terminal rows to DynamoDB |
 | `${publisher}-throttles` | `AWS/Lambda` `Throttles` (Sum) on the publisher | `> 0` over 5 min | The publisher has no reserved or maximum concurrency; throttles stall result publishing and leave `succeeded`/`failed` rows without matching S3 objects |
 | `${publisher-dlq}-messages-visible` | `AWS/SQS` `ApproximateNumberOfMessagesVisible` (Max) on the publisher DLQ | `> 0` over 5 min | A stream batch exhausted `maximum_retry_attempts`. The single source of truth for failed batches, mirroring the extractor DLQ alarm ([ADR-0014](docs/adr/0014-split-results-module.md)) |

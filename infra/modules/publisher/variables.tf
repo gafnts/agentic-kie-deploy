@@ -64,7 +64,7 @@ variable "stream_batching_window_seconds" {
 }
 
 variable "stream_retry_attempts" {
-  description = "Retries before a failed batch lands in the DLQ. Mirrors the extractor's maxReceiveCount=3 for retry-budget symmetry across the pipeline."
+  description = "Retries before a failed batch lands in the DLQ. Mirrors the extractor's single-pass maxReceiveCount (3) for retry-budget symmetry across the pipeline. The publisher is flavor-agnostic so this holds at 3 even when the extractor tightens to 2 under the agentic flavor."
   type        = number
   default     = 3
 }
