@@ -35,6 +35,16 @@ variable "llm_model" {
   default     = "gemini-3-flash-preview"
 }
 
+variable "extractor_flavor" {
+  description = "Which agentic-kie extraction strategy the extractor runs. 'single_pass' issues one structured LLM call; 'agentic' runs a ReAct loop over the document. Selectable per environment at deploy time; drives the whole parameter profile (max_iterations, maxReceiveCount) so re-parametrization is a one-variable flip."
+  type        = string
+  default     = "single_pass"
+  validation {
+    condition     = contains(["single_pass", "agentic"], var.extractor_flavor)
+    error_message = "extractor_flavor must be 'single_pass' or 'agentic'."
+  }
+}
+
 variable "alarm_email" {
   description = "Email address subscribed to the alarm SNS topic. Leave null to skip the subscription (alarms still fire in CloudWatch, they just don't notify anyone). The recipient must confirm the subscription from their inbox before delivery starts."
   type        = string
