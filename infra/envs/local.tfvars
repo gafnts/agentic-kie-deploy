@@ -1,1 +1,2 @@
-environment = "local"
+environment      = "local"
+extractor_flavor = "agentic"

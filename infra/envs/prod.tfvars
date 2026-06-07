@@ -1,2 +1,3 @@
-environment = "prod"
-alarm_email = "gafnts@gmail.com"
+environment      = "prod"
+extractor_flavor = "single_pass"
+alarm_email      = "gafnts@gmail.com"
