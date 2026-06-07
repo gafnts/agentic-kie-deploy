@@ -1,4 +1,4 @@
-# ADR-0016: Agentic-Flavor Deployment and Re-Parametrization
+# ADR-0016: Agentic-Flavor Deployment
 
 ## Status
 
@@ -6,15 +6,15 @@ Proposed (2026-06-06).
 
 ## Context
 
-The project is named `agentic-kie-deploy`, but every environment to date runs the **single-pass** extractor (`SinglePassExtractor`, [handler.py:84](../../src/extractor/handler.py#L84)). That was a deliberate, measured choice: the offline benchmark ([*When does agency earn its cost?*](https://gabriel.com.gt/blog/when-does-agency-earn-its-cost/)) found that on the Kleister NDA corpus single-pass dominates the matrix—~91.5% F1 at ~$0.007/doc and ~9.8s, while the agentic flavor cost 2–4× the latency and dollars (Claude-standard ran ~$0.038/~65s) for gains "insufficient to justify the overhead," and lite-tier agentic *regressed* more documents than it improved. Agency did not earn its cost, so we shipped the flavor that did.
+The project is named `agentic-kie-deploy`, but every environment to date runs the **single-pass** extractor (`SinglePassExtractor`, [handler.py:84](../../src/extractor/handler.py#L84)). That was a deliberate, measured choice: the offline benchmark ([*When does agency earn its cost?*](https://gabriel.com.gt/blog/when-does-agency-earn-its-cost/)) found that on the Kleister NDA corpus single-pass dominates the matrix—~91.5% F1 at ~$0.007/doc and ~9.8s, while the agentic flavor cost more in latency and dollars—Claude-standard ran ~$0.038/~65s (2–4× single-pass); Gemini Standard agentic is ~$0.011/~14.6s (~1.5×)—for gains "insufficient to justify the overhead," and lite-tier agentic *regressed* more documents than it improved. Agency did not earn its cost, so we shipped the flavor that did.
 
 That verdict is **offline**: a one-shot accuracy/cost eval on 83 dev documents. It says nothing about what agency costs *the deployed system under arrival pressure*—which is a different and harsher cost than per-document dollars. [ADR-0015](0015-load-testing-strategy.md) measured the deployed behavior of the single-pass flavor (both scenarios passed all five SLOs); the symmetric exercise for the agentic flavor has never been run. So three things are simultaneously true:
 
 - The name promises a capability the deployment doesn't currently exercise.
 - The strongest decision in the project—*not* shipping agentic—is only half-justified, because it rests on offline numbers and never confronts the deployed envelope.
-- Deploying and load-testing the agentic flavor is where every dormant finding in ADR-0015 stops being hypothetical (the provider-RPM coupling of Finding 1; the errors-alarm-vs-DLQ-alarm question of Finding 2).
+- The offline verdict has a deployed counterpart no benchmark can produce—the agency premium *in the running pipeline* (drain time, queue dwell, the infra cost the eval never saw)—and the exercise gives ADR-0015's dormant findings a live look: Finding 1's provider-RPM coupling gets *measured* (and, at Tier 1, is likely confirmed slack), and Finding 2's errors-alarm-vs-DLQ question becomes testable via a deliberate stressor.
 
-This ADR settles **how** the agentic flavor is deployed and, more importantly, how the architecture is *re-derived* for it—because the single-pass parameters are correct only for a ~10s, one-LLM-call-per-document workload, and the agentic flavor invalidates every input to that model.
+This ADR settles **how** the agentic flavor is deployed and how its parameter envelope is re-derived. The headline, once the real numbers are in—Gemini agentic is ~1.5× single-pass, not the 2–4× a Claude-standard outlier suggested—is narrower than "re-tune everything": the existing envelope already absorbs agentic at the ADR-0015 bracket, exactly two knobs genuinely move, and the payoff is the *deployed* agency premium plus the capability itself, not a system pushed to breaking.
 
 ### The agentic flavor changes the workload model, not just a constant
 
@@ -23,17 +23,17 @@ This ADR settles **how** the agentic flavor is deployed and, more importantly, h
 | Property | Single-pass | Agentic | Consequence |
 |---|---|---|---|
 | LLM calls per document | exactly 1 | N, data-dependent (1 → `max_iterations`) | request rate decouples from document rate |
-| Service time | ~10s (p99 31s) | ~25–40s expected (2–4×), fatter/bimodal tail | steady-state capacity collapses |
+| Service time | ~10s (p99 31s) | ~14.6s (benchmark, ~1.5×), fatter/bimodal tail | steady-state capacity contracts |
 | Input tokens/doc | fixed per document | inflated (re-reads pages across turns) | provider TPM headroom shrinks |
 | Failure modes | one call succeeds/fails | loop non-termination, repeated tool error, partial state | `max_iterations` exhaustion → `ExtractionError` |
 
-The single-pass parameters were *derived* from its workload model (service ~10s → capacity `cap ÷ service` ≈ 60/min at staging; provider draw = throughput because calls = throughput). Re-using those constants for agentic isn't conservative—it's mis-tuned. The honest move is to re-run the derivation, the same way ADR-0015 wrote a model and graded it.
+The single-pass parameters were *derived* from its workload model (service ~10s → capacity `cap ÷ service` ≈ 60/min at staging; provider draw = throughput because calls = throughput). The honest move is to re-run that derivation and see which constants actually move—not to assume the whole envelope is wrong. At only ~1.5× service the queue-dynamics constants mostly still fit; as it turns out (below), one knob (`max_iterations`) is wrong independent of latency, one (`maxReceiveCount`) is worth tightening, and the rest hold.
 
 ### The architectural change: one concurrency knob becomes two
 
 In single-pass, the SQS event-source `maximum_concurrency` ([extractor/main.tf:130](../../infra/modules/extractor/main.tf#L130)) does three jobs at once *because one document equals one LLM call*: it caps document parallelism (throughput), caps concurrent LLM requests (the cost-burst guardrail), and bounds the provider RPM draw (Finding 1's coupling). Those collapse into a single number only at a 1:1 doc-to-call ratio.
 
-Agentic fans out **inside** a document, so documents-in-flight ≠ requests-in-flight: the request side now scales with `cap × calls_per_doc`, which is variable and which the SQS cap does not control. The cap still governs throughput, but the cost-guardrail and provider-coupling jobs need a **second control surface**: a request-level limiter (token bucket / semaphore in the handler) sized against the Gemini RPM/TPM budget. The SQS event-source cap governs *document* parallelism; the in-handler limiter governs *request* parallelism. That decoupling is the real architectural finding—the deployed-infra echo of the offline thesis: agency doesn't merely cost more per document, it breaks the assumption that one knob controls both throughput and provider exposure.
+Agentic fans out **inside** a document, so documents-in-flight ≠ requests-in-flight: the request side now scales with `cap × calls_per_doc`, which is variable and which the SQS cap does not control. The cap still governs throughput, but the cost-guardrail and provider-coupling jobs need a **second control surface**: a request-level limiter (token bucket / semaphore in the handler) sized against the Gemini RPM/TPM budget. The SQS event-source cap governs *document* parallelism; the in-handler limiter governs *request* parallelism. That decoupling is the real architectural finding—the deployed-infra echo of the offline thesis: agency doesn't merely cost more per document, it breaks the assumption that one knob controls both throughput and provider exposure. *Conceptually* real is not the same as *quantitatively* binding, though: at Tier 1 (4,000 RPM) with cap ≤ 25 and ~1.5× service, the request side draws only a few hundred RPM (~410 even at prod's cap 25), ~10× under the ceiling. So the second control surface is a thing to *measure for*, and to reach for as N or the cap grows—not something this deployment needs built today (Finding B).
 
 ## Decision
 
@@ -42,9 +42,9 @@ Agentic fans out **inside** a document, so documents-in-flight ≠ requests-in-f
 Introduce `var.extractor_flavor` (`single_pass` | `agentic`, default `single_pass`). It drives two things:
 
 1. **The handler constructor.** `_extractor()` ([handler.py:84-90](../../src/extractor/handler.py#L84-L90)) reads a new `EXTRACTOR_FLAVOR` env var and builds either `SinglePassExtractor(model, schema)` (today) or `AgenticExtractor(model, schema, modality="text", max_iterations=<profile>)`. Both are already exported by `agentic_kie`, share the identical `(model, schema)` interface, and raise the same `ExtractionError` the handler already catches into `batchItemFailures` ([handler.py:356](../../src/extractor/handler.py#L356))—so the agentic failure path flows through the existing redrive/DLQ machinery unchanged. `Extractor[NDA]` (also exported) becomes the return type so the cache helper covers both.
-2. **The parameter profile** (below), so the infra constants move *with* the flavor rather than being hand-edited per run.
+2. **The parameter profile** (below), keyed off `extractor_flavor` so the whole envelope—timeout, derived visibility, `maxReceiveCount`, `max_iterations`, the limiter—moves *with* the flavor rather than being hand-edited. Switching any environment's flavor is then a one-variable change, which is the point: re-parametrization should be as cheap as flipping the variable.
 
-Prod is untouched—it remains single-pass with deletion protection. The agentic profile is applied to **staging** for the characterization run (staging's single-pass baseline already lives in the ADR-0015 artifacts, so re-applying it loses nothing), then reverted. A dedicated `staging-agentic` environment is the cleaner-but-heavier alternative (recorded below).
+Every environment—staging and prod alike—can run **either** flavor, selected per environment at deploy time, with single-pass the default everywhere. Because the full profile follows `extractor_flavor` (above), pointing any environment at agentic is a one-variable change, and pointing it back is the same. The characterization run is done on **staging** first: you validate a new flavor's deployed envelope before offering it to prod, and staging's single-pass baseline already lives in the ADR-0015 artifacts, so flipping it loses nothing. Prod thereby *gains the capability* to run agentic while keeping single-pass (and its deletion protection) by choice—nothing about prod is reverted, because the infra change is a permanent capability, not a temporary patch. A dedicated `staging-agentic` environment remains an option for a continuous side-by-side (recorded below).
 
 ### The re-derived parameter profile
 
@@ -52,10 +52,10 @@ Prod is untouched—it remains single-pass with deletion protection. The agentic
 |---|---|---|---|
 | `max_iterations` (agent) | n/a | **8–12** (down from the library default 50) | The real cost/latency governor. A doc that can't terminate should fail fast into a *bounded* cost, not burn 50 LLM calls. This is the agentic analog of single-pass's deterministic single call. |
 | `modality` | `text` | `text` | Avoids image-token blow-up; keeps the per-doc TPM draw bounded and Finding 1's coupling slack. |
-| Lambda timeout ([main.tf:33](../../infra/main.tf#L33)) | 120s | **300s** (backstop) | Above the worst legitimate `max_iterations`-bounded run (~10 calls), not the governor. A timeout is a crash → retry → wasted spend; `max_iterations` should bite first. |
-| Visibility timeout | 720s (= 120×6) | **1800s** (= 300×6, automatic) | Already *derived* as `timeout × 6` ([queue/main.tf:2](../../infra/modules/queue/main.tf#L2)). Raising the Lambda timeout moves it in lockstep—one knob, not two—and is exactly what keeps SLO 2 from breaching under the longer queue dwell. |
-| `maximum_concurrency` | 10 staging / 25 prod | **10** (held — cost-preserving) | See the fork below. |
-| **(new) request-level limiter** | implicit in the cap | explicit token bucket vs RPM/TPM | in-doc fan-out decoupled it from the cap (see Context). |
+| Lambda timeout ([main.tf:33](../../infra/main.tf#L33)) | 120s | **120s (unchanged)** | Benchmark mean is 14.6s, and `max_iterations` 8–12 bounds the worst legit run to ~40–70s—well under the existing 120s, which already absorbed single-pass's 50s tail. `max_iterations`, not the clock, is the governor; the timeout is a backstop that already has margin. No reason to move it. |
+| Visibility timeout | 720s (= 120×6) | **720s (unchanged)** | Derived as `timeout × 6` ([queue/main.tf:2](../../infra/modules/queue/main.tf#L2)), so it tracks the timeout automatically. The timeout stays at 120s, so this stays at 720s—and at ~290s peak dwell (below) that is ~2.5× headroom. The coupling is worth keeping; it just doesn't need to fire here. |
+| `maximum_concurrency` | 10 staging / 25 prod | **held at the environment's existing cap** (cost-preserving) | A per-environment lever, independent of flavor—not part of the flavor profile; see the fork below. |
+| **(new) request-level limiter** | implicit in the cap | **measure first, build only if the draw warrants** | In-doc fan-out decouples request rate from the cap (see Context), but at Tier 1 + cap ≤ 25 the draw sits ~10× under budget. Conditional on the run's measured provider rate (Finding B), not built up front. |
 | `maxReceiveCount` ([queue default](../../infra/modules/queue/variables.tf#L16)) | 3 | **2** | Agentic failures are mostly logic (non-terminating loop, repeated tool error), not transient. Retrying an expensive doomed run 3× triples its cost for nothing. |
 | `batch_size` / batching window | 1 / 0 | 1 / 0 (unchanged) | One long ReAct run per invocation is already correct; batching would head-of-line-block. |
 | Memory | 2048 MB | 2048 MB (revisit) | Latency is LLM-wall-clock-bound (network), not CPU-bound; memory buys cold-start and glue speed only. A modest lever, left at baseline pending evidence. |
@@ -64,19 +64,19 @@ Prod is untouched—it remains single-pass with deletion protection. The agentic
 
 ### The one genuine fork: throughput vs. cost containment
 
-Capacity is `cap ÷ service_time`. To hold single-pass-like drain behavior (a 200-burst absorbed and drained in a few minutes) the cap would rise from 10 to ~30 to offset the ~3× longer service time. That fights the cost guardrail. The choice:
+Capacity is `cap ÷ service_time`. To hold single-pass-like drain behavior (a 200-burst absorbed and drained in a few minutes) the cap would rise from 10 to ~15 to offset the ~1.5× longer service time. That fights the cost guardrail. The choice:
 
-- **Throughput-preserving**: raise the cap to ~30, keep drains fast, accept a ~3× wider cost-burst exposure on the *expensive* flavor.
-- **Cost-preserving** (chosen): hold the cap at 10, let SQS hold the backlog longer, and pay for the longer dwell with the higher (auto-derived) visibility timeout.
+- **Throughput-preserving**: raise the cap to ~15, keep drains fast, accept a ~1.5× wider cost-burst exposure on the *expensive* flavor.
+- **Cost-preserving** (chosen): hold the cap at its existing per-environment value (10 on staging), let SQS hold the backlog longer, and pay for the longer dwell with the higher (auto-derived) visibility timeout.
 
-**We choose cost-preserving.** Agentic is the flavor that already doesn't earn its cost; letting it *also* fan out 30-wide and spike spend is the wrong instinct. Lean harder on the buffer the architecture already has, not on the throttle. That stance is itself the finding: *the right response to a slower, costlier workload is to widen the buffer's job, not the throttle's.* (Flip this one knob and the rest of the profile is unchanged—the decision is isolated by design.)
+**We hold the existing cap (cost-preserving)—but at ~1.5× this is a low-stakes call, not a principled stand.** Raising it to ~15 would cost ~50% more concurrent spend for a faster drain, and either way the 200-doc bracket completes in minutes with the DLQ empty. We change nothing because the cap is a per-environment lever and there's no measured reason to touch it; if drain time ever matters more than spend, ~15 is the one-variable flip. The original *principle*—lean on the buffer, not the throttle—still holds; it just isn't being tested at this scale.
 
 ## Pass/fail criteria (SLOs)
 
 The agentic runs reuse ADR-0015's five SLOs, adjusted for the re-derived envelope; criterion 6 is new and is the point of the exercise.
 
 1. **Correctness (primary run)**—200/200 reach `succeeded`; both DLQs at 0. (A *deliberate low-`max_iterations` stressor run* is exempt and expected to DLQ—see criterion 5.)
-2. **No premature redelivery**—`ApproximateAgeOfOldestMessage` stays well under the **new 1800s** visibility timeout and the queue drains to empty. This is the SLO the re-parametrization exists to protect: under the *old* 720s timeout, a 200-burst at ~30s service would push the last messages to ~570s dwell and brush redelivery. Confirming it holds under the new profile—and would not under the old—is the headline.
+2. **No premature redelivery**—`ApproximateAgeOfOldestMessage` stays well under the (unchanged) 720s visibility timeout and the queue drains to empty. At 14.6s actual service time, a 200-burst drains in ~290s—~2.5× under the 720s, so the original threat (the inflated ~30s estimates that pushed dwell toward ~570s) never materializes. Nothing in the envelope needed to move for this; the headline is simply that the queue drains cleanly and dwell stays well under the timeout.
 3. **Concurrency & provider rate hold**—peak `ConcurrentExecutions` ≤ cap; zero `Throttles`; **and** the in-handler limiter keeps the LLM request rate under the Gemini RPM/TPM budget (the new control surface working).
 4. **Latency—reported, not gated, and compared.** Agentic is slow by design; the e2e/processing percentiles are reported, not failed. The *deliverable* is the agentic-vs-single-pass delta on the same corpus in the same deployed pipeline (criterion 6).
 5. **Alarms honest**—primary run: no alarm fires. **Stressor run: this finally exercises Finding 2.** When `max_iterations` is capped low enough that genuinely hard docs exhaust it → `ExtractionError` → retry → DLQ, the prediction (from [handler.py:356](../../src/extractor/handler.py#L356)) is that `Errors` stays flat (failures are reported as `batchItemFailures`, a *successful* invocation) and **only** the `${dlq}-messages-visible` alarm fires, not `${extractor}-errors`. Confirming this on a live run closes Finding 2.
@@ -84,10 +84,10 @@ The agentic runs reuse ADR-0015's five SLOs, adjusted for the re-derived envelop
 
 ## Expected behavior (hypotheses to confirm or refute)
 
-- **Service time** ~25–40s mean (2–4× single-pass), tail bounded by `max_iterations` rather than by a 120s crash; **capacity** collapses from ~60/min to ~15–25/min at the held cap.
-- **Burst**: queue peaks near 200 (as single-pass), but *drains in ~8–13 min* not ~4; concurrency pins at the cap; oldest-message age peaks ~400–600s—comfortably under 1800s, **breaching the old 720s**. DLQ 0 on the primary run; no alarm.
-- **Sustained**: at a rate set to ~22% of the *new* capacity, queue ≈ 0, concurrency hovers low; latency ≈ processing (which is now multi-call and several-fold higher).
-- **Cost**: ~$0.015–0.025/doc on Gemini text-modality agentic (more calls, but no image tokens, cheaper model than the blog's Claude-standard); ~$6–10 for both scenarios.
+- **Service time** ~14.6s mean (benchmark, ~1.5× single-pass), tail bounded by `max_iterations` rather than by a timeout crash; **capacity** contracts from ~60/min to ~41/min at the held cap.
+- **Burst**: queue peaks near 200 (as single-pass), but *drains in ~5 min* not ~3.5; concurrency pins at the cap; oldest-message age peaks ~290s—comfortably under the unchanged 720s timeout. DLQ 0 on the primary run; no alarm.
+- **Sustained**: at a rate set to ~22% of the *new* capacity (~9/min), queue ≈ 0, concurrency hovers low; latency ≈ processing (which is now multi-call).
+- **Cost**: ~$0.011/doc on Gemini text-modality agentic (benchmark); ~$4–5 for both scenarios (200 docs each).
 - **Finding 2 stressor**: docs that exhaust the low `max_iterations` DLQ cleanly with `Errors` flat and only the DLQ alarm firing.
 
 If reality diverges, the divergence is the finding.
@@ -100,32 +100,32 @@ No new harness. The ADR-0015 driver under `tests/load/` is **flavor-agnostic**: 
 
 Positive:
 
-- The project earns its name: it deploys `agentic-kie`, both flavors, selected at deploy time.
+- The project earns its name: it deploys `agentic-kie`, both flavors, selectable per environment at deploy time—prod included.
 - The offline "agency doesn't earn its cost" verdict gains its deployed counterpart, including the infra cost the benchmark could not measure.
-- Findings 1 and 2 move from hypotheses to live results; the request-level limiter and the cap-decoupling are exercised, not just reasoned about.
+- Finding 2 gets a live test (via the deliberate stressor sub-run); Finding 1 is *measured* and—at Tier 1 with these caps—expected to stay slack, which is itself a recorded result. The cap-decoupling is documented as a watch-item for higher N / prod's cap, not prematurely built.
 - The re-parametrization is reusable: the flavor profile is the template for any future heavier workload (multimodal, a larger schema).
 
 Negative:
 
-- Real work: a handler constructor switch, a new `extractor_flavor` parameter + profile plumbing, and the request-level limiter (genuinely new code, not a config change). More LLM spend (~$6–10) than the single-pass runs.
-- Re-applying staging to the agentic profile displaces its single-pass deployment for the duration (mitigated: the baseline is already captured; or stand up `staging-agentic`).
+- Real work: a handler constructor switch and a new `extractor_flavor` parameter + profile plumbing (plus the request-level limiter *only if* the measured draw warrants it—see Finding B). More LLM spend (~$4–5) than the single-pass runs.
+- An environment runs one flavor at a time, so flipping staging to agentic means it isn't serving single-pass during the run window (mitigated: the baseline is already captured and flip-back is one variable; or stand up a second environment for a continuous side-by-side).
 - The agentic flavor does not change the production decision—single-pass remains the default. This is characterization, not a reversal.
 
 Neutral:
 
-- Prod is untouched. The agentic profile is staging-only and reverted after the run.
+- The production *decision* is unchanged—prod keeps single-pass by choice—while the *capability* to run agentic is added for every environment. Adding the option is not exercising it; the change reverts nothing.
 
 ## Findings
 
 (Recorded as discovered; pre-implementation findings first.)
 
-- **Finding A—`max_iterations` defaults to 50, which is a latency/cost bomb in a Lambda.** The library default lets a single document drive up to 50 LLM calls before raising. Under a 120s function timeout that document would crash (timeout) long before iteration 50, turning a logic problem into an infra fault and a retry. The profile caps it at 8–12 so the *agent* governs cost, and raises the timeout so the cap—not the clock—is what bites. The single-pass flavor never surfaced this because it has no loop.
+- **Finding A—`max_iterations` defaults to 50, which is a latency/cost bomb in a Lambda.** The library default lets a single document drive up to 50 LLM calls before raising. Under a 120s function timeout that document would crash (timeout) long before iteration 50, turning a logic problem into an infra fault and a retry. The profile caps it at 8–12 so the *agent* governs cost and a doomed doc fails fast and cheap—well inside the existing 120s, so the timeout stays put as the backstop. The single-pass flavor never surfaced this because it has no loop.
 - **Finding B (to confirm)—the SQS event-source cap stops being a provider-rate control under agentic.** Because in-doc fan-out decouples request rate from document rate, holding `maximum_concurrency` no longer bounds RPM/TPM. Whether the new in-handler limiter is necessary, or Tier 1's headroom absorbs `cap × calls_per_doc` anyway, is a quantity to measure on the run, not assume.
 
 ## Alternatives considered
 
 - **Flip the existing staging extractor by env var only (no parameter profile).** Simplest, but re-parametrizing (timeout → visibility, `maxReceiveCount`, the limiter) means editing shared infra by hand per run, and you cannot hold a clean single-pass baseline alongside. Rejected: the flavor and its derived envelope should move together as one parameter.
-- **Throughput-preserving cap (~30).** Holds single-pass drain times. Rejected for v1 (see the fork): it widens cost exposure on the flavor we deploy *because* it's expensive. Recorded as a one-line flip if drain time ever matters more than spend.
+- **Throughput-preserving cap (~15).** Holds single-pass drain times. Not chosen for v1 (see the fork)—though at ~1.5× the cost delta is small enough that this is nearly a coin-flip. Recorded as a one-variable flip if drain time ever matters more than spend.
 - **Multimodal / image modality.** Closer to what a "read the document like a human" agent implies, and what some benchmark rows used. Rejected for the deploy: image tokens multiply the TPM draw and re-tighten Finding 1's coupling for no measured accuracy win on this text-heavy NDA corpus. `text` keeps the provider budget slack.
 - **Dedicated `staging-agentic` environment.** A true side-by-side: agentic and single-pass live simultaneously, no baseline displacement. Heavier (a full env stand-up, its own alarms, its own teardown) and unnecessary given the baseline is already captured. Recorded as the cleaner path if a *continuous* A/B is ever wanted, per the single-tenant deployment model ([ADR-0013](0013-single-tenant-deployment-model.md)).
 - **Don't deploy agentic; explain the name in prose.** The zero-cost path: a README/blog line saying the name refers to the library, which implements both flavors. Rejected as the anticlimactic answer—it leaves the project's strongest decision resting on offline numbers and forgoes the most interesting load-testing exercise available.
