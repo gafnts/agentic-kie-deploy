@@ -20,8 +20,16 @@ from .measure import Targets
 
 pytestmark = pytest.mark.load
 
+# pytest-timeout backstop (wall-clock). Sustained paces uploads across a ~15-min
+# window, then polls completion (up to ~10 min) and settles for CloudWatch
+# propagation, so it needs far more headroom than burst (which drains in a few
+# minutes). Resolved from the env at import so the decorator sees the right
+# ceiling per scenario.
+_SUSTAINED = (os.environ.get("LOAD_SCENARIO") or "burst") == "sustained"
+_TIMEOUT_S = 2400 if _SUSTAINED else 1200
 
-@pytest.mark.timeout(1200)
+
+@pytest.mark.timeout(_TIMEOUT_S)
 def test_scenario(
     boto_session: Any,
     s3: Any,

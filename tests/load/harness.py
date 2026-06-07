@@ -119,17 +119,26 @@ def run_sustained(
     docs: list[Document],
     window_s: float = 900.0,
 ) -> list[Upload]:
-    """Pace the same uploads evenly across the window with light jitter."""
+    """
+    Pace the same uploads evenly across the window with light jitter.
+
+    Each upload is scheduled against an absolute deadline (``start + i*interval``)
+    rather than sleeping a full interval *after* it returns, so the upload's own
+    cost is absorbed into the gap. The real arrival window stays ``window_s``
+    instead of overshooting it by the cumulative upload time (which previously
+    stretched a nominal 15-min run to ~18 min and slowed the arrival rate).
+    """
     interval = window_s / len(docs)
     rng = random.Random(0)
     uploads: list[Upload] = []
+    start = time.time()
     bar = tqdm(docs, desc="upload (paced)", unit="doc", disable=None)
     for i, doc in enumerate(bar):
         uploads.append(upload_one(creds, region, api_endpoint, doc))
         if i < len(docs) - 1:
-            _countdown(
-                bar, max(0.0, interval + rng.uniform(-interval / 4, interval / 4))
-            )
+            jitter = rng.uniform(-interval / 4, interval / 4)
+            target = start + (i + 1) * interval + jitter
+            _countdown(bar, max(0.0, target - time.time()))
     return uploads
 
 
