@@ -44,6 +44,7 @@ class Targets:
     api_id: str
     analytics_bucket: str
     ingestion_bucket: str
+    flavor: str = "single_pass"  # deployed extraction strategy (ADR-0016)
 
     @property
     def alarm_prefix(self) -> str:

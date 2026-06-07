@@ -153,10 +153,29 @@ def evaluate(
             )
         )
 
-    # 4. Latency
+    # 4. Latency. Gated for single_pass on the <10s-benchmark-derived bars;
+    # reported, not gated for agentic (ADR-0016 Finding C), which is slow by
+    # design—its deliverable is the agentic-vs-single-pass delta (criterion 6),
+    # not a pass/fail bar. passed=None is not False, so a slow agentic run never
+    # trips the harness's `assert not failures`.
+    agentic = targets.flavor == "agentic"
     proc = [r.processing_s for r in ok if r.processing_s is not None]
     if not proc:
         slos.append(SLO(4, "Latency", None, "no processing data"))
+    elif agentic:
+        proc_p90 = _percentile(proc, 0.9)
+        e2e = [r.total_e2e for r in ok if r.total_e2e is not None]
+        e2e_p90 = _percentile(e2e, 0.9) if e2e else None
+        e2e_str = f"; e2e p90 {e2e_p90:.1f}s" if e2e_p90 is not None else ""
+        slos.append(
+            SLO(
+                4,
+                "Latency",
+                None,
+                f"processing p90 {proc_p90:.1f}s{e2e_str} "
+                "(agentic: reported, not gated)",
+            )
+        )
     else:
         proc_p90 = _percentile(proc, 0.9)
         if scenario == "sustained":
@@ -223,6 +242,7 @@ def build(
     return {
         "scenario": scenario,
         "env": targets.env,
+        "flavor": targets.flavor,
         "n": len(results),
         "timestamp": datetime.now(UTC).isoformat(),
         "window": layer_a["window"],
@@ -253,7 +273,8 @@ def write_artifact(report: dict[str, Any]) -> Path:
 def format_report(report: dict[str, Any]) -> str:
     lat = report["latency"]
     lines = [
-        f"\n=== load report: {report['scenario']} / {report['env']} / n={report['n']} ===",
+        f"\n=== load report: {report['scenario']} / {report['env']} / "
+        f"{report.get('flavor', 'single_pass')} / n={report['n']} ===",
         f"  {'segment':<12}{'p50':>8}{'p90':>8}{'p99':>8}{'max':>8}",
     ]
     for label, key in [
