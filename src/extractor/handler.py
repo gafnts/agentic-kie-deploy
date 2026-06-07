@@ -19,7 +19,7 @@ from functools import cache
 from typing import Any, cast
 
 import boto3
-from agentic_kie import PDFLoader, SinglePassExtractor
+from agentic_kie import AgenticExtractor, Extractor, PDFLoader, SinglePassExtractor
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from botocore.exceptions import ClientError
@@ -81,12 +81,28 @@ def _bootstrap_secrets() -> None:
 
 
 @cache
-def _extractor() -> SinglePassExtractor[NDA]:
-    """Build the key information extractor."""
+def _extractor() -> Extractor[NDA]:
+    """
+    Build the key information extractor for the deployed flavor (ADR-0016).
+
+    ``EXTRACTOR_FLAVOR`` selects the strategy: ``single_pass`` (default) issues
+    one structured LLM call; ``agentic`` runs a ReAct loop over the document,
+    capped at ``EXTRACTOR_MAX_ITERATIONS`` LangGraph supersteps. Both satisfy the
+    ``Extractor`` protocol and share the identical ``(model, schema)`` interface,
+    so the handler's broad ``except`` routes either one's failure—including the
+    agentic non-termination ``ExtractionError``—through the same redrive path.
+    """
     _bootstrap_secrets()
     model = ChatGoogleGenerativeAI(
         model=os.environ["LLM_MODEL"], google_api_key=_llm_api_key()
     )
+    if os.environ.get("EXTRACTOR_FLAVOR", "single_pass") == "agentic":
+        return AgenticExtractor(
+            model=model,
+            schema=NDA,
+            modality="text",
+            max_iterations=int(os.environ.get("EXTRACTOR_MAX_ITERATIONS", "30")),
+        )
     return SinglePassExtractor(model=model, schema=NDA)
 
 
