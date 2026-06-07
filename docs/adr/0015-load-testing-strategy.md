@@ -172,7 +172,13 @@ Neutral:
 
 - **Finding 1—`maximum_concurrency` is implicitly coupled to the provider RPM budget, and nothing enforces it.** A cap that permits more RPM than the LLM tier allows converts a burst into DLQ'd documents (429 → exhausted SQS retries → DLQ → page), not buffered ones. Discovered while sizing this test against the free tier (15 RPM vs. the pipeline's ~60). Tier 1 makes the coupling slack today, so it is not a blocker—but the extractor has no 429-specific retry/backoff distinct from the generic SQS redrive, and the cap is not derived from any provider budget. Backlog: 429-aware backoff in the extractor, and/or documenting the cap-vs-RPM relationship at the root. Out of scope for this ADR; recorded so the next person sizing concurrency knows the constraint exists.
 
-- **Finding 2 (hypothesis, to confirm during the run)—the `${extractor}-errors` alarm may not fire for a poison document the way the README's alarm table describes.** That table says a single bad document "fires this up to three times before it lands in the DLQ." But the handler catches extraction exceptions and reports them as SQS `batchItemFailures` ([handler.py:309](../../src/extractor/handler.py#L309)), which Lambda counts as *successful* invocations—so `Errors`, and therefore the `${extractor}-errors` alarm, may stay flat while the document retries into the DLQ, leaving only `${dlq}-messages-visible` to fire. The burst/sustained runs won't naturally produce failures (Tier 1 headroom), so this is a code-read hypothesis, not yet a finding; a deliberate poison-pill injection would confirm it. If confirmed, the README's alarm description needs a correction (the early-warning signal is the DLQ alarm, not the errors alarm).
+- **Finding 2 (hypothesis, to confirm during the run)—the `${extractor}-errors` alarm may not fire for a poison document the way the README's alarm table describes.** That table says a single bad document "fires this up to three times before it lands in the DLQ." But the handler catches extraction exceptions and reports them as SQS `batchItemFailures` ([handler.py:309](../../src/extractor/handler.py#L309)), which Lambda counts as *successful* invocations—so `Errors`, and therefore the `${extractor}-errors` alarm, may stay flat while the document retries into the DLQ, leaving only `${dlq}-messages-visible` to fire. The burst/sustained runs won't naturally produce failures (Tier 1 headroom), so this is a code-read hypothesis, not yet a finding; a deliberate poison-pill injection would confirm it. If confirmed, the README's alarm description needs a correction (the early-warning signal is the DLQ alarm, not the errors alarm). **Run outcome (2026-06-07): not exercised, and therefore still open.** Both scenarios produced zero failures (Tier 1 headroom, exactly as predicted), so `Errors` stayed flat for the benign reason—no documents to fail—rather than the suspected one. The hypothesis is neither confirmed nor refuted by these runs; closing it needs the deliberate poison-pill injection, which belongs to the deferred stubbed-LLM resilience suite.
+
+- **Finding 3 (post-run)—the steady-state-capacity arithmetic under-predicts instantaneous concurrency.** Sustained peak concurrency was 5 (it hovered 2–5), above the predicted 1–3. The prediction came from `concurrency ≈ arrival_rate × service_time` (0.22 doc/s × ~6s ≈ 1.3), which is a mean-value estimate: it holds for the average but not the peak. Arrivals carry light jitter and processing has a fat right tail (the heaviest-output docs run 40–47s, ~8× the ~6s p50), so a few long extractions overlap a brief arrival cluster and push instantaneous concurrency to 5. Benign here—half the cap, zero throttles, no SLO impact—but the next person sizing `maximum_concurrency` against an arrival rate should size for the tail, not the mean.
+
+- **Finding 4 (post-run)—CloudWatch's 1-minute period under-reports the instantaneous queue peak; the live sampler is the truer number.** The burst's `ApproximateNumberOfMessagesVisible` peaked at 164 in the post-run `GetMetricData` pull (and in the SQS console dashboard), but the harness's own 5-second sampler caught 192. The gap is metric averaging—a spike that builds and begins draining inside a single 60s bucket is smoothed by that bucket. This is why the harness samples queue depth directly rather than trusting the post-run pull, and why the report carries both numbers. A corroborating fingerprint visible only in the console dashboard: `NumberOfEmptyReceives` *drops to near-zero during the burst* (every poller is pulling real messages) and *climbs during the sustained run* (pollers long-poll a near-empty queue)—an independent signature of the event-source self-pacing the cap produces, from a metric the harness never instrumented.
+
+- **Finding 5 (post-run)—processing p90 clears the latency SLO by a thin margin.** Processing p90 was 13.5s (burst) / 13.8s (sustained) against the ~15s bar (1.5× the <10s benchmark)—~90% of the threshold. The cause is the output-token tail: p50 processing is ~5.8s, but the heaviest extractions emit 6–8k output tokens and run 44–47s (p99 31s burst / 44s sustained, max ~50s—still well under the extractor's 120s timeout). The headline single-doc latency is healthy; the p90 sits where it does because a real corpus carries a heavy-output minority. A future tightening of the latency SLO, or a model/prompt change that lengthens outputs, would land on this bar first.
 
 ## Alternatives considered
 
@@ -183,3 +189,42 @@ Neutral:
 - **Free tier, run as-is.** Rejected once Tier 1 was enabled. On the free tier the run would have measured Google's 429 limiter as much as our pipeline (see Finding 1); Tier 1 removes the artificial ceiling for ~the same per-token cost.
 - **Ramp-to-knee (step load until the queue grows unboundedly).** The test that actually locates the throughput limit. Out of scope here—this ADR brackets normal-day behavior; the knee is a separate, follow-up exercise.
 - **External load tool (k6 / Locust / Artillery).** Rejected for v1: the work is SigV4-signed presign + PUT + asynchronous result polling + CloudWatch metric correlation, which the existing Python/boto3 smoke fixtures already do most of. A Python driver reuses that machinery; an external tool would re-implement the signing and could not stamp e2e completion from the analytics bucket as cleanly.
+
+## Post-implementation
+
+Both scenarios executed 2026-06-07 against staging on a Gemini Tier 1 key, and both passed all five SLOs—200/200 documents `succeeded`, both DLQs at depth 0, no alarm fired—at a combined LLM spend of ~$2.70 (burst $1.37, sustained $1.33), under the ~$2.80 pre-estimate. The full per-document segments, Layer A series, cold-start counts, and alarm history live in the two run artifacts rather than inline here:
+
+- Burst: [`single-pass-burst-staging-20260607T001303Z.json`](../../tests/load/reports/baseline/single-pass-burst-staging-20260607T001303Z.json)
+- Sustained: [`single-pass-sustained-staging-20260607T011311Z.json`](../../tests/load/reports/baseline/single-pass-sustained-staging-20260607T011311Z.json)
+
+### Hypotheses, confirmed or refuted
+
+The point of pre-registering the predictions is that the run *grades* them rather than rationalizing whatever happened. Walking the two lists from *Expected behavior*:
+
+**Burst—confirmed, almost verbatim.**
+
+| Prediction | Outcome |
+|---|---|
+| Queue peaks ~190–200 | 192 (live sampler); 164 via CloudWatch averaging—see Finding 4 |
+| Drains in ~3–4 min | ~3.85 min (200 docs ÷ 51.9 docs/min) |
+| Concurrency pins at 10 | Peak 10 exactly; zero throttles |
+| Latency bimodal (first ~10 eat cold start) | 10 cold starts (avg init 2.6s); the rest warm |
+| e2e a near-linear ramp by upload order | Queue-wait grows with upload position (~4s early → 167s late); total e2e p90 178s, max 227s—inside the predicted 200–240s band |
+| DLQ 0; no alarm | Both held |
+
+**Sustained—confirmed, with one divergence.**
+
+| Prediction | Outcome |
+|---|---|
+| Queue stays ≈0 | Peak visible 1; CloudWatch depth flat 0 |
+| Concurrency hovers 1–3 | Hovered 2–5, **peak 5**—ran hotter than predicted; see Finding 3 |
+| Latency ≈ processing (no queue wait) | e2e p50 9.5s ≈ processing 5.9s + publish 1.3s + queue 1.1s |
+| A few cold starts | 4 |
+| DLQ 0; no alarm | Both held |
+
+The lone divergence—sustained concurrency peaking at 5, not 3—is benign (half the cap, zero throttles) and is generalized in Finding 3. Everything else landed on its prediction, and the burst's headline thesis held cleanly: under saturation, end-to-end latency is dominated by queue wait (p90 169s of the 178s total), which is the concurrency cap buffering as designed, not a bottleneck and not the LLM.
+
+### Still owed
+
+- **Finding 2 is unresolved, not closed**—the errors-alarm hypothesis could not be exercised on runs that produced zero failures. It awaits the deliberate poison-pill, which lands with the stubbed-LLM resilience suite this ADR defers.
+- **The ramp-to-knee test is still owed.** As *Consequences* anticipated, the sustained run confirms the floor is uneventful but does not locate the throughput limit. The bracket is now measured; the knee is not.

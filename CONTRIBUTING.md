@@ -28,6 +28,7 @@ This repo contains the Terraform infrastructure for the Agentic KIE project, dep
 - [Day-to-day workflow](#day-to-day-workflow)
   - [Local iteration](#local-iteration)
   - [Manual smoke test](#manual-smoke-test)
+  - [Load testing](#load-testing)
   - [Quality gates](#quality-gates)
   - [Opening a PR](#opening-a-pr)
   - [Promoting to prod](#promoting-to-prod)
@@ -296,6 +297,51 @@ aws dynamodb get-item \
 > [!NOTE]
 > `make smoke` runs both paths automatically via pytest (`TestExtractorSmoke` and `TestUploaderSmoke` in [tests/test_smoke.py](tests/test_smoke.py), each with a 180-second timeout). Use the manual steps above when you want to observe log output in real time or inspect the raw DynamoDB item.
 
+### Load testing
+
+Where smoke drives one document, the load harness drives the **real front door under arrival pressure**—presigner → presigned PUT → S3 → EventBridge → SQS → extractor → DynamoDB → Streams → publisher → analytics S3—across two arrival patterns, and answers whether the pipeline *degrades gracefully (buffers and drains) rather than fails (errors and DLQs)*, and whether the alarms tell the truth while it happens. It lives under [tests/load/](tests/load/), is excluded from the default `pytest` run (`norecursedirs`), and is invoked explicitly. See [ADR-0015](docs/adr/0015-load-testing-strategy.md) for the full design—the two scenarios (a calm `sustained` baseline and a saturating `burst`), the five SLOs, and the predictions each run tests.
+
+> [!IMPORTANT]
+> Load tests run against **staging only** and spend **real money**—roughly **$1.40 per scenario** (~$2.80 for both) on live LLM calls, plus real writes to staging that the harness deletes in a `finally`. The harness resolves the target environment from the deployed resource names and **refuses `prod`** at runtime, regardless of how it's invoked.
+
+**Materialize the corpus** (once per clone). The sample is drawn from the Kleister NDA *train* partition, which is **not committed**—the PDFs would bloat the repo and trip the large-files hook. Fetch it via the pinned [`nda`](https://github.com/gafnts/kleister-nda-preparation) package into the git-ignored corpus directory:
+
+```bash
+uv run nda --output_dir tests/load/documents
+```
+
+This lays down `tests/load/documents/{train,dev-0,test-A}/documents/*.pdf`; the harness samples 200 distinct train documents with a fixed seed and reuses them, in the same order, across both scenarios (reproducible from the pinned package plus the seed).
+
+**Run a scenario.** Point Terraform at staging, then invoke the scenario explicitly—`LOAD_SCENARIO` selects `burst` or `sustained`:
+
+```bash
+make init ENV=staging
+LOAD_SCENARIO=burst     uv run pytest tests/load/test_scenarios.py -s
+LOAD_SCENARIO=sustained uv run pytest tests/load/test_scenarios.py -s
+```
+
+Each run injects the documents, samples queue depth and in-flight concurrency live (CloudWatch's 1-minute series would smooth past the burst's true peak), tracks every document to its result landing, reads the latency segments from **server-side** timestamps, pulls the CloudWatch / Logs Insights / alarm telemetry, and writes a JSON artifact under `tests/load/reports/` alongside a printed summary and a pass/fail verdict against the five SLOs.
+
+> [!TIP]
+> Verify the whole path end-to-end for pennies before committing to a full 200-document run by shrinking the sample with `LOAD_N`:
+>
+> ```bash
+> LOAD_N=3 LOAD_SCENARIO=burst uv run pytest tests/load/test_scenarios.py -s
+> ```
+>
+> | Variable | Default | Purpose |
+> |---|---|---|
+> | `LOAD_SCENARIO` | `burst` | Arrival pattern: `burst` or `sustained` |
+> | `LOAD_N` | `200` | Sample size—lower it for a contained dry-run |
+> | `LOAD_SETTLE` | `120` | Seconds to wait after drain for CloudWatch/Logs to propagate before the metric pull |
+
+> [!NOTE]
+> The corpus sanity check needs no AWS and makes no LLM call—it parses the sampled PDFs locally and confirms the size/token distribution sits inside the run envelope (the extractor's 120s timeout and the Gemini Tier-1 TPM ceiling) before any traffic is generated. Run it standalone after materializing the corpus:
+>
+> ```bash
+> uv run pytest tests/load/test_corpus.py -s
+> ```
+
 ### Quality gates
 
 Hooks run automatically, but you can also invoke them on demand. Useful when you want fast feedback on a single tool, or to run the full suite before pushing.
@@ -372,9 +418,11 @@ Run `make help` for the full list of targets with descriptions, grouped by secti
 
 ### Files that are gitignored
 
-- `.terraform/`—Terraform plugin cache and local state
-- `infra/tfplan.*`—Saved plan binaries
-- `infra/iam/iam.tfvars`—Contains your principal ARN
+- `.terraform/` — Terraform plugin cache and local state
+- `infra/tfplan.*` — Saved plan binaries
+- `infra/iam/iam.tfvars` — Contains your principal ARN
+- `tests/load/documents/` — The load-test corpus, materialized via `uv run nda` (not committed)
+- `tests/load/reports/` — Load-test run artifacts (JSON)
 
 ### Design notes
 
