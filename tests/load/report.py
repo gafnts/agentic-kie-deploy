@@ -127,12 +127,19 @@ def evaluate(
             )
         )
 
-    # 3. Concurrency cap holds
-    peak_conc = max(
-        metrics.get("ext_concurrency", {}).get("peak", 0.0), sampler.peak_in_flight
-    )
+    # 3. Concurrency cap holds. The authoritative signals are Lambda's
+    # ConcurrentExecutions (Maximum) and Throttles (Sum): with maximum_concurrency
+    # set on the event source mapping, AWS throttles an invocation before it runs
+    # past the cap, so throttles == 0 proves the cap held even if a sub-minute
+    # spike slips past the 1-minute ConcurrentExecutions granularity. The SQS
+    # in-flight sampler (ApproximateNumberOfMessagesNotVisible) is a noisy proxy—it
+    # counts the receive→delete window and poller prefetch, so it legitimately sits
+    # a hair above true concurrency at the drain boundary—so it is reported, not
+    # gated (its QueueSampler docstring already names CloudWatch the authority).
+    peak_conc = metrics.get("ext_concurrency", {}).get("peak", 0.0)
     throttles = metrics.get("ext_throttles", {}).get("total", 0.0)
     cap = targets.concurrency_cap
+    inflight = f" (sqs in-flight peak {sampler.peak_in_flight}, proxy)"
     if cap is None:
         slos.append(
             SLO(
@@ -140,7 +147,7 @@ def evaluate(
                 "Concurrency cap holds",
                 None,
                 f"peak concurrency {peak_conc:.0f} (no cap for env {targets.env}); "
-                f"throttles {throttles:.0f}",
+                f"throttles {throttles:.0f}{inflight}",
             )
         )
     else:
@@ -149,7 +156,8 @@ def evaluate(
                 3,
                 "Concurrency cap holds",
                 peak_conc <= cap and throttles == 0,
-                f"peak concurrency {peak_conc:.0f} <= {cap}; throttles {throttles:.0f}",
+                f"peak concurrency {peak_conc:.0f} <= {cap}; "
+                f"throttles {throttles:.0f}{inflight}",
             )
         )
 
