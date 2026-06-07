@@ -134,9 +134,9 @@ Neutral:
 
 ## Post-implementation
 
-### Burst run — staging, agentic, 2026-06-07
+### Burst run
 
-Artifact: `tests/load/reports/baseline/agentic-burst-staging-20260607T194252Z.json`.
+- Artifact: [`agentic-burst-staging-20260607T194252Z.json`](../../tests/load/reports/baseline/agentic-burst-staging-20260607T194252Z.json)
 
 **SLO verdict: 4/5 passed; SLO 1 (Correctness) failed — 199/200 succeeded, 1 harness timeout.**
 
@@ -166,9 +166,9 @@ The harness `await_completion` default was 600s. Since 600s < 720s, the harness 
 
 **The root-cause document** hits the `max_iterations=30` ceiling on a legitimately hard NDA. This is the failure mode the Decision section predicted and the `ExtractionError` path is designed to handle — the fix is the harness window, not the iteration cap, because a cap-exhausting doc should DLQ cleanly (after `SQS_MAX_RECEIVE_COUNT` attempts) rather than be given more iterations.
 
-### Sustained run — staging, agentic, 2026-06-07
+### Sustained run
 
-Artifact: `tests/load/reports/baseline/agentic-sustained-staging-20260607T204008Z.json`.
+- Artifact: [`agentic-sustained-staging-20260607T204008Z.json`](../../tests/load/reports/baseline/agentic-sustained-staging-20260607T204008Z.json)
 
 **SLO verdict: 4/5 passed; SLO 1 (Correctness) failed — 199/200 succeeded, 0 failed, 1 harness timeout; DLQ ext=2 (both measurement artifacts, not run failures — see Finding E).**
 
