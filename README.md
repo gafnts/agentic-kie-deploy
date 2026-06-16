@@ -1,4 +1,4 @@
-<h1 align="center">Agentic KIE Deployment</h1>
+<h1 align="center">Serverless Key Information Extraction</h1>
 <p align="center">
   <strong>Serverless, event-driven AWS infrastructure for asynchronous key information extraction with LLMs.</strong>
 </p>
@@ -25,7 +25,7 @@
 
 ## Why this exists
 
-[`agentic-kie`](https://github.com/gafnts/agentic-kie) is a Python library that extracts structured fields from PDF documents with LLMs. A library is not a service. Running it against real traffic means solving four problems the library does not address: absorbing arbitrary uploads without proxying large payloads through compute, decoupling the synchronous caller from the slow LLM call, making extraction retryable without re-uploading, and fitting heavy ML dependencies into a Lambda execution environment.
+[`agentic-kie`](https://github.com/gafnts/agentic-kie) is a Python library that extracts structured fields from PDF documents with LLMs. A library is not a service. Running it against real traffic means solving problems the library does not address: absorbing arbitrary uploads without proxying large payloads through compute, decoupling the synchronous caller from the slow LLM call, making extraction retryable without re-uploading, and handing the caller a result address up front so it can read the structured output the moment it lands.
 
 This repository is that production layer: the AWS infrastructure that turns the library into an asynchronous extraction service. It is built as a deployable template, one instance per extraction use case (one document type and schema) owned by the team that deploys it, rather than a multi-tenant platform spanning schemas. Within an instance, callers and consumers can both be many; the one schema is the boundary. The reasoning is settled in [ADR-0013](docs/adr/0013-single-tenant-deployment-model.md) and refined in [ADR-0017](docs/adr/0017-refine-tenancy-unit-to-schema.md); the full set of decisions lives in the [architecture decision records](docs/adr/README.md).
 
@@ -46,17 +46,17 @@ The extractor runs [`agentic-kie`](https://github.com/gafnts/agentic-kie) and wr
 | Ingestion bucket | S3 | Receives uploads directly from callers, emits Object Created events |
 | Event router | EventBridge | Routes bucket events to the extraction queue |
 | Queue | SQS + DLQ | Buffers events, retries on failure, isolates bad messages |
-| Extractor | Lambda (container image) | Runs the agentic LLM extraction loop |
+| Extractor | Lambda (container image) | Runs the LLM-based information extraction |
 | Results table | DynamoDB (+ Streams) | Holds the canonical extraction row, keyed by `document_id` |
 | Result publisher | Lambda (zip) | Consumes Streams, writes terminal results to the analytics bucket |
-| Analytics bucket | S3 | Holds result objects; the caller subscribes to its `s3:ObjectCreated:*` events |
-| Catalog | Glue table + Athena workgroup | Ad-hoc query layer over the analytics partition |
+| Analytics bucket | S3 | Holds result objects; the consumers subscribe to its `s3:ObjectCreated:*` events |
+| Catalog | Glue table + Athena workgroup | Ad-hoc query layer over the result objects |
 
 ---
 
 ## Using the pipeline
 
-A caller touches the system at exactly two points: the uploader API at the front, and the analytics bucket at the back. Everything in between is internal.
+The system has exactly two public touchpoints: the uploader API at the front, and the analytics bucket at the back. Everything in between is internal.
 
 1. Request an upload slot. Sign `POST /uploads` with SigV4 (the route is `AWS_IAM` authorized, so the caller signs with the IAM role it already holds).
 ```bash
@@ -100,7 +100,7 @@ A result object is written only for a terminal outcome. `status` is `succeeded` 
 > [!NOTE]
 > The caller needs two grants, both scoped against Terraform outputs: `execute-api:Invoke` on the uploader route (`uploader_route_arn`) and `s3:GetObject` on the analytics bucket's `extractions/*` prefix (`analytics_bucket_arn`). The grants live on the caller's side because an instance serves one schema but any number of in-account callers and consumers, each scoping its own access ([ADR-0013](docs/adr/0013-single-tenant-deployment-model.md) / [ADR-0017](docs/adr/0017-refine-tenancy-unit-to-schema.md)).
 
-For runnable end-to-end commands covering both the direct-S3 and full uploader paths, see the manual smoke test in [CONTRIBUTING.md](CONTRIBUTING.md).
+For runnable end-to-end commands covering the full uploader path, see the manual smoke test in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
