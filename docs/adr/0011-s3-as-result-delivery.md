@@ -54,7 +54,7 @@ ADR-0002's reasoning held for an unspecified caller. For an AWS-native caller it
 
 ### Why not SNS
 
-- SNS buys push fan-out to multiple subscribers per message. The tenancy model (ADR-0013) does allow multiple readers of the result prefix via S3 grants, but those are pull-readers reacting to S3 events on a shared key — not push subscribers to a topic. The fan-out SNS would buy is unused either way.
+- SNS buys push fan-out to multiple subscribers per message. The tenancy model (ADR-0013) does allow multiple readers of the result prefix via S3 grants, but those are pull-readers reacting to S3 events on a shared key—not push subscribers to a topic. The fan-out SNS would buy is unused either way.
 - If a caller ever needs push delivery to multiple downstream subscribers, the right place for that fan-out is on the consumer's side (their SNS topic, their EventBridge bus subscribed to the S3 event), not on ours. Keeping the egress topology one-to-many-via-S3 on our side keeps our blast radius small.
 - SNS-to-Lambda is at-least-once with a 256 KB message-size cap; while the result payload comfortably fits today, putting it in the message rather than referencing it sets up a future cliff we do not need to set up.
 - The caller is responsible for the subscription either way (SNS subscription or S3 event rule), but the S3 event subscription gives the caller the payload at a known address as a side effect, not as a separate fetch.

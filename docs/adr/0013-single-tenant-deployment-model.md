@@ -53,13 +53,13 @@ If, in a given environment, the account boundary is *not* a sufficient perimeter
 
 ### Implications for the existing modules
 
-| Module       | What "single-tenant" looks like                                                                                                                                                |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `uploader`   | One IAM principal expected to invoke `POST /uploads`. CloudWatch's `client_principal` should be the same value across calls in a healthy state; a different principal is an investigative signal. |
-| `extractor`  | One container image, one document-type configuration, one secret path. The image identity *is* the instance's identity.                                                        |
-| `table`      | One results table per instance. The `extracted_fields` map shape is determined by the extractor's configuration; no cross-instance schema reuse is needed or attempted.        |
-| `results`    | One S3 result prefix, one schema contract. Readers of that prefix (one in the common case, more if granted) all read against the same schema. The Glue table and Athena workgroup are per-instance—cross-instance analytics is a future federation problem, not an in-instance problem. |
-| `iam`        | The `Environment`-tagged deny guard is the per-env boundary inside an instance; it does not become a per-tenant boundary, because there is no tenancy concept inside an instance. |
+| Module | What "single-tenant" looks like |
+| --- | --- |
+| `uploader` | One IAM principal expected to invoke `POST /uploads`. CloudWatch's `client_principal` should be the same value across calls in a healthy state; a different principal is an investigative signal. |
+| `extractor` | One container image, one document-type configuration, one secret path. The image identity *is* the instance's identity. |
+| `table` | One results table per instance. The `extracted_fields` map shape is determined by the extractor's configuration; no cross-instance schema reuse is needed or attempted. |
+| `results` | One S3 result prefix, one schema contract. Readers of that prefix (one in the common case, more if granted) all read against the same schema. The Glue table and Athena workgroup are per-instance—cross-instance analytics is a future federation problem, not an in-instance problem. |
+| `iam` | The `Environment`-tagged deny guard is the per-env boundary inside an instance; it does not become a per-tenant boundary, because there is no tenancy concept inside an instance. |
 
 ### Why not a platform
 
