@@ -27,7 +27,7 @@
 
 [`agentic-kie`](https://github.com/gafnts/agentic-kie) is a Python library that extracts structured fields from PDF documents with LLMs. A library is not a service. Running it against real traffic means solving four problems the library does not address: absorbing arbitrary uploads without proxying large payloads through compute, decoupling the synchronous caller from the slow LLM call, making extraction retryable without re-uploading, and fitting heavy ML dependencies into a Lambda execution environment.
 
-This repository is that production layer: the AWS infrastructure that turns the library into an asynchronous extraction service. It is built as a deployable template (one instance per caller and document type) rather than a multi-tenant platform that routes by document type. The reasoning behind that shape, and what it implies for IAM, schema, and result delivery, is settled in [ADR-0013](docs/adr/0013-single-tenant-deployment-model.md); the full set of decisions lives in the [architecture decision records](docs/adr/README.md).
+This repository is that production layer: the AWS infrastructure that turns the library into an asynchronous extraction service. It is built as a deployable template, one instance per extraction use case (one document type and schema) owned by the team that deploys it, rather than a multi-tenant platform spanning schemas. Within an instance, callers and consumers can both be many; the one schema is the boundary. The reasoning is settled in [ADR-0013](docs/adr/0013-single-tenant-deployment-model.md) and refined in [ADR-0017](docs/adr/0017-refine-tenancy-unit-to-schema.md); the full set of decisions lives in the [architecture decision records](docs/adr/README.md).
 
 ---
 
@@ -98,7 +98,7 @@ curl -X PUT --data-binary @document.pdf "$UPLOAD_URL"
 A result object is written only for a terminal outcome. `status` is `succeeded` or `failed` (a failed object carries an `error` block instead of `extracted_fields`). A document still in flight, or one that exhausted its retries into the dead-letter queue, has no object yet.
 
 > [!NOTE]
-> The caller needs two grants, both scoped against Terraform outputs: `execute-api:Invoke` on the uploader route (`uploader_route_arn`) and `s3:GetObject` on the analytics bucket's `extractions/*` prefix (`analytics_bucket_arn`). The grants live on the caller's side because each deployed instance serves exactly one caller ([ADR-0013](docs/adr/0013-single-tenant-deployment-model.md)).
+> The caller needs two grants, both scoped against Terraform outputs: `execute-api:Invoke` on the uploader route (`uploader_route_arn`) and `s3:GetObject` on the analytics bucket's `extractions/*` prefix (`analytics_bucket_arn`). The grants live on the caller's side because an instance serves one schema but any number of in-account callers and consumers, each scoping its own access ([ADR-0013](docs/adr/0013-single-tenant-deployment-model.md) / [ADR-0017](docs/adr/0017-refine-tenancy-unit-to-schema.md)).
 
 For runnable end-to-end commands covering both the direct-S3 and full uploader paths, see the manual smoke test in [CONTRIBUTING.md](CONTRIBUTING.md).
 
