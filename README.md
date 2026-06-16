@@ -63,21 +63,33 @@ The stack is provisioned with Terraform across three environments in one AWS acc
 > Before deploying you need:
 > - [Terraform](https://developer.hashicorp.com/terraform/install) `~> 1.15`, [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) with credentials, and [uv](https://docs.astral.sh/uv/) for the Python tooling
 > - a [GitHub OIDC provider](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws) in the account (the IAM module references it but does not create it)
-> - an **LLM provider key** and a **LangSmith key**, stored in AWS Secrets Manager—the extractor reads them on the hot path
+> - an **LLM provider key** and a **LangSmith key**, stored in AWS Secrets Manager
 
-Stand up a local instance:
+Stand up a local instance in four steps.
+
+**Install tooling and bootstrap state.** Sync the Python dependencies and git hooks, then create the S3 backend that holds Terraform state for all three environments (once per account):
 
 ```bash
-make install    # Dev dependencies and git hooks
-make bootstrap  # Remote state backend (once per account)
+make install
+make bootstrap
+```
 
-# Store the extractor's secrets (once per environment)
+**Store the extractor's secrets.** The extractor reads an LLM provider key and a LangSmith key from AWS Secrets Manager, created out-of-band so their lifecycle stays independent of `terraform apply`:
+
+```bash
 aws secretsmanager create-secret --name agentic-kie-deploy/local/llm-provider --secret-string '<your-llm-provider-key>'
 aws secretsmanager create-secret --name agentic-kie-deploy/local/langsmith --secret-string '<your-langsmith-key>'
+```
 
-make provision  # IAM roles, ECR repository, and service-stack init
+**Provision the deploy roles and registry.** A single target chains the IAM roles, the ECR repository, and the service-stack init for `local`:
 
-# Build the extractor image, capture its digest, and apply
+```bash
+make provision
+```
+
+**Build the extractor image and apply.** The service stack pins the extractor to an image digest, so build and push the image, capture its digest, and apply:
+
+```bash
 export TF_VAR_extractor_image_digest=$(make build-extractor ENV=local)
 make apply ENV=local
 ```
@@ -157,6 +169,6 @@ The infrastructure is a set of small, per-concern Terraform modules wired togeth
 
 | Where | What |
 |---|---|
-| [docs/README.md](docs/README.md) | Per-module reference: every lever, default, and tradeoff, plus the observability plane |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to set up, deploy, and operate the stack (environments, branches, day-to-day workflow) |
+| [docs/README.md](docs/README.md) | Per-module reference: every lever, default, and tradeoff, plus the observability plane |
 | [docs/adr/](docs/adr/README.md) | Architecture decision records: why each choice was made and what was rejected |
