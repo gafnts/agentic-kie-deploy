@@ -351,8 +351,8 @@ def cleanup(
     Skips documents still marked ``timeout``: those never reached a terminal
     DynamoDB status, so the extractor may still be draining them from the SQS
     backlog. Deleting a timeout doc's source object out from under an in-flight
-    retry makes ``s3:GetObject`` return 403 — the extractor role has no
-    ``s3:ListBucket``, so a missing key surfaces as AccessDenied, not NoSuchKey —
+    retry makes ``s3:GetObject`` return 403, the extractor role has no
+    ``s3:ListBucket``, so a missing key surfaces as AccessDenied, not NoSuchKey,
     which lands the message in the DLQ as a phantom failure. Leave their objects
     and rows in place to finish processing; purge them once the backlog drains.
     """
