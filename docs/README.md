@@ -1,11 +1,6 @@
-<h1 align="center">Module Reference</h1>
-<p align="center">
-  <strong>Per-module reference for the Agentic KIE deployment: every lever, default, and the reasoning behind it.</strong>
-</p>
+# Module Reference
 
----
-
-<p align="center">The infrastructure is organized as small, per-concern Terraform modules wired together at the root in <a href="../infra/main.tf">infra/main.tf</a>. The order below mirrors the data flow. For the system overview and how to use the pipeline, see the <a href="../README.md">project README</a>.</p>
+The infrastructure is organized as small, per-concern Terraform modules wired together at the root in [infra/main.tf](../infra/main.tf). The order below mirrors the data flow. For the system overview and how to use the pipeline, see the [project README](../README.md).
 
 ## Contents
 
