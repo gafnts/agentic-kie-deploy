@@ -1,6 +1,6 @@
 # Module Reference
 
-The infrastructure is organized as small, per-concern Terraform modules wired together at the root in [infra/main.tf](../infra/main.tf). The order below mirrors the data flow. For the system overview and how to use the pipeline, see the [project README](../README.md).
+The infrastructure is organized as small, per-concern Terraform modules wired together at the root in [infra/main.tf](../infra/main.tf). The order below roughly follows the data flow, with shared stores introduced before their writers (the table before the extractor that fills it). For the system overview and how to use the pipeline, see the [project README](../README.md).
 
 ## Contents
 
@@ -12,6 +12,7 @@ The infrastructure is organized as small, per-concern Terraform modules wired to
 - [Publisher](#publisher)
 - [Analytics](#analytics)
 - [Observability](#observability)
+  - [Alarms](#alarms)
 
 ---
 
