@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-05-24).
+Accepted (2026-05-24). Amended by [ADR-0017](0017-refine-tenancy-unit-to-schema.md) (2026-06-15): the tenancy unit is the schema (the extraction use case), not the caller, so an instance may serve many callers and consumers. The single-tenant model and the platform rejection below are unchanged.
 
 ## Context
 

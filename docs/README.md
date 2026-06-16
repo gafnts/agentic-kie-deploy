@@ -178,7 +178,7 @@ The analytics module is the durable store and its query surface—the half of th
 The Glue database (`{project}_{environment}_analytics`) and the workgroup (`{project}-{environment}-analytics`) are named for the subsystem, not the dataset; the table keeps the dataset name, `extractions`, so a query reads naturally as `analytics.extractions`. After the split, nothing in the query layer carries the word `results`, which now denotes exactly one thing: the DynamoDB [table](#table).
 
 > [!NOTE]
-> The analytics bucket is the result-delivery surface, but the caller's `s3:GetObject` grant on `extractions/*` deliberately lives on the caller's side, not in this module—the module exposes `bucket_arn` for the caller to scope its own grant against, and each deployed instance serves exactly one caller ([ADR-0013](adr/0013-single-tenant-deployment-model.md)). The bucket uses SSE-S3 (AES256); for regulated result data, the same SSE-KMS migration sketched for the ingestion bucket and the table applies.
+> The analytics bucket is the result-delivery surface, but each consumer's `s3:GetObject` grant on `extractions/*` deliberately lives on the consumer's side, not in this module: the module exposes `bucket_arn` for each consumer to scope its own grant against. An instance serves one schema but any number of in-account consumers ([ADR-0013](adr/0013-single-tenant-deployment-model.md) / [ADR-0017](adr/0017-refine-tenancy-unit-to-schema.md)). The bucket uses SSE-S3 (AES256); for regulated result data, the same SSE-KMS migration sketched for the ingestion bucket and the table applies.
 
 ---
 
