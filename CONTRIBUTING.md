@@ -1,6 +1,6 @@
 # Contributing
 
-This repo contains the Terraform infrastructure for the Agentic KIE project, deployed to AWS across three environments (`local`, `staging`, `prod`). Contributing means authoring Terraform. Infrastructure changes trigger a CI-generated plan on every PR so reviewers can see exactly what would land; production additionally gates the apply on a manual approval against a saved plan generated post-merge.
+This repo contains the Terraform infrastructure for the Agentic KIE project, deployed to AWS across three environments (`local`, `staging`, `prod`). Contributing means authoring, for the most part, Terraform and Python. Infrastructure changes trigger a CI-generated plan on every PR so reviewers can see exactly what would land; production additionally gates the apply on a manual approval against a saved plan generated post-merge.
 
 > [!IMPORTANT]
 > This project requires:
@@ -27,10 +27,11 @@ This repo contains the Terraform infrastructure for the Agentic KIE project, dep
   - [Configure your local AWS profile](#configure-your-local-aws-profile)
 - [Day-to-day workflow](#day-to-day-workflow)
   - [Local iteration](#local-iteration)
+  - [Selecting the extractor flavor](#selecting-the-extractor-flavor)
   - [Manual smoke test](#manual-smoke-test)
   - [Load testing](#load-testing)
   - [Quality gates](#quality-gates)
-  - [Opening a PR](#opening-a-pr)
+  - [Shipping to staging](#shipping-to-staging)
   - [Promoting to prod](#promoting-to-prod)
   - [Adding new infrastructure](#adding-new-infrastructure)
 - [Reference](#reference)
@@ -145,10 +146,11 @@ The repository is named `agentic-kie-deploy-<env>-extractor`, has tag immutabili
 
 The extractor Lambda depends on two long-lived API keys: the LLM provider key (used on the hot path) and the LangSmith key (used to ship traces). They are stored in AWS Secrets Manager, one secret per environment, created out-of-band so their lifecycle stays independent of `terraform apply` / `terraform destroy`. See [ADR-0009](docs/adr/0009-extractor-lambda.md) for the rationale.
 
-Create the four secrets (two per env, three envs):
+Create the six secrets (two keys per env, three envs).
+
+First, the LLM provider keys (one per env):
 
 ```bash
-# LLM provider keys
 aws secretsmanager create-secret \
   --name agentic-kie-deploy/local/llm-provider \
   --secret-string '<your-llm-provider-key>'
@@ -158,8 +160,11 @@ aws secretsmanager create-secret \
 aws secretsmanager create-secret \
   --name agentic-kie-deploy/prod/llm-provider \
   --secret-string '<your-llm-provider-key>'
+```
 
-# LangSmith keys
+Then, the LangSmith keys (one per env):
+
+```bash
 aws secretsmanager create-secret \
   --name agentic-kie-deploy/local/langsmith \
   --secret-string '<your-langsmith-key>'
@@ -175,9 +180,6 @@ Terraform discovers the secrets by name at plan time—no ARNs to copy or paste.
 
 > [!IMPORTANT]
 > Terraform manages the IAM grants on these secrets but **not** their values. Rotating a key is `aws secretsmanager update-secret` against the existing secret; the Lambda picks the new value up on the next cold start (warm invocations within a ~15-minute execution-environment lifetime continue to see the old value, by design).
-
-> [!NOTE]
-> The uploader module has no out-of-band setup. It is part of the service stack and picks up `url_ttl_seconds` from tfvars at apply time.
 
 ### Configure GitHub
 
@@ -245,9 +247,35 @@ make destroy ENV=local   # Tear down all local resources
 > [!IMPORTANT]
 > `make` defaults to `ENV=local`. The Makefile refuses to apply or destroy `prod` unless `I_KNOW=1`—only CI is allowed to set that. `make destroy` only tears down the service stack; the ECR repository in `infra/registry/` has its own lifecycle and a separate `make registry-destroy ENV=<env>` command (same guards apply—prefer it over invoking `terraform destroy` directly inside `infra/registry/`).
 
+### Selecting the extractor flavor
+
+The extractor ships in two flavors: `single_pass` issues one structured LLM call, `agentic` runs a ReAct loop over the document. The flavor is a deploy-time choice *per environment*—it drives the whole parameter profile (the agent's `max_iterations` and the queue's `maxReceiveCount`), so re-parametrizing is a one-variable flip. See [ADR-0016](docs/adr/0016-agentic-flavor-deployment.md) for the rationale.
+
+It's set in the committed `infra/envs/<env>.tfvars` file, which every `make plan`/`make apply` for that env loads automatically. Current defaults:
+
+| Env | `extractor_flavor` |
+|---|---|
+| `local` | `agentic` |
+| `staging` | `agentic` |
+| `prod` | `single_pass` |
+
+To change a flavor, edit the env's tfvars and ship it through the normal PR → plan → apply flow—the plan diff shows the flavor switch and the two parameter changes it pulls along (`max_iterations`, `maxReceiveCount`).
+
+> [!TIP]
+> For a throwaway local experiment, call Terraform directly with a trailing `-var`, which wins over the var-file (a CLI `-var` outranks `-var-file`; a `TF_VAR_` env var would not):
+>
+> ```bash
+> terraform -chdir=infra apply -var-file=envs/local.tfvars -var extractor_flavor=single_pass
+> ```
+>
+> Keep staging and prod changes as a reviewable tfvars diff, never an override.
+
+> [!NOTE]
+> Flavor drives cost: `agentic` issues multiple LLM calls per document, `single_pass` one. That's why the same load scenario costs roughly 2× more on `agentic` (see [Load testing](#load-testing)). Staging runs `agentic`, so load tests—which target staging—pay the agentic rate.
+
 ### Manual smoke test
 
-After applying infrastructure, you can verify the pipeline end-to-end using only the AWS CLI. Two paths matter: the direct-S3 path exercises the extraction half (S3 → EventBridge → SQS → Lambda → DynamoDB), and the uploader-API path additionally exercises the front door (API Gateway → presigner → presigned PUT).
+After applying infrastructure, you can verify the pipeline end-to-end using only the AWS CLI. Two paths matter: the direct-S3 path isolates the extraction half (S3 → EventBridge → SQS → Lambda → DynamoDB), and the uploader-API path drives the whole surface front to back—the front door (API Gateway → presigner → presigned PUT), through extraction, and on to the publisher's analytics write (DynamoDB Streams → publisher → analytics S3).
 
 **Direct-S3 path** (bypasses the uploader, useful for isolating the extraction half):
 
@@ -272,12 +300,13 @@ aws dynamodb get-item \
   --consistent-read
 ```
 
-**Uploader-API path** (exercises the full surface, including SigV4 and the presigner):
+**Uploader-API path** (the full surface—SigV4, presigner, extraction, and the publisher's write to the analytics bucket):
 
 ```bash
 # 1. Capture the uploader endpoint and downstream outputs
 API=$(terraform -chdir=infra output -raw uploader_api_endpoint)
 TABLE=$(terraform -chdir=infra output -raw results_table_name)
+ANALYTICS_BUCKET=$(terraform -chdir=infra output -raw analytics_bucket_name)
 
 # 2. Sign POST /uploads with SigV4 and capture the presigned PUT URL
 RESP=$(awscurl --service execute-api -X POST "$API/uploads")
@@ -287,11 +316,18 @@ UPLOAD_URL=$(echo "$RESP" | jq -r .upload_url)
 # 3. PUT the document to the returned URL (no signing—the URL is already signed)
 curl -X PUT --data-binary @tests/static/smoke_document.pdf "$UPLOAD_URL"
 
-# 4. Check DynamoDB for the result
+# 4. Check DynamoDB for the extractor's terminal row
 aws dynamodb get-item \
   --table-name "$TABLE" \
   --key "{\"document_id\":{\"S\":\"$DOC_ID\"}}" \
   --consistent-read
+```
+
+The publisher then fans the terminal row out to the analytics bucket as `extractions/{yyyy}/{mm}/{dd}/{document_id}.json`, the same bytes Athena queries. Confirm it landed:
+
+```bash
+# 5. Confirm the publisher wrote the result object to the analytics bucket
+aws s3 ls "s3://$ANALYTICS_BUCKET/extractions/" --recursive | grep "$DOC_ID"
 ```
 
 > [!NOTE]
@@ -302,7 +338,7 @@ aws dynamodb get-item \
 Where smoke drives one document, the load harness drives the **real front door under arrival pressure**—presigner → presigned PUT → S3 → EventBridge → SQS → extractor → DynamoDB → Streams → publisher → analytics S3—across two arrival patterns, and answers whether the pipeline *degrades gracefully (buffers and drains) rather than fails (errors and DLQs)*, and whether the alarms tell the truth while it happens. It lives under [tests/load/](tests/load/), is excluded from the default `pytest` run (`norecursedirs`), and is invoked explicitly. See [ADR-0015](docs/adr/0015-load-testing-strategy.md) for the full design—the two scenarios (a calm `sustained` baseline and a saturating `burst`), the five SLOs, and the predictions each run tests.
 
 > [!IMPORTANT]
-> Load tests run against **staging only** and spend **real money**—roughly **$1.40 per scenario** (~$2.80 for both) on live LLM calls, plus real writes to staging that the harness deletes in a `finally`. The harness resolves the target environment from the deployed resource names and **refuses `prod`** at runtime, regardless of how it's invoked.
+> Load tests run against **staging only** and spend **real money** on live LLM calls, plus real writes to staging that the harness deletes in a `finally`. The cost depends on the deployed extractor flavor: **single-pass** is roughly **$1.40 per scenario** (~$2.80 for both), while **agentic** is closer to **$2.90 per scenario** (~$5.85 for both). The harness resolves the target environment from the deployed resource names and **refuses `prod`** at runtime, regardless of how it's invoked.
 
 **Materialize the corpus** (once per clone). The sample is drawn from the Kleister NDA *train* partition, which is **not committed**—the PDFs would bloat the repo and trip the large-files hook. Fetch it via the pinned [`nda`](https://github.com/gafnts/kleister-nda-preparation) package into the git-ignored corpus directory:
 
@@ -355,13 +391,15 @@ make test      # Run pytest with coverage
 make tf-format # Format all Terraform files
 ```
 
-`make check` is what the CI mirror job runs. If it passes locally, your PR will pass the lint/format/scan stage in CI.
+> [!IMPORTANT]
+> `make check` is what the CI mirror job runs. If it passes locally, your PR will pass the lint/format/scan stage in CI.
 
-If a hook version in `.pre-commit-config.yaml` is updated, `make install` reinstalls the hook environments. If the tflint plugin version in `.tflint.hcl` changes, run `make tflint-init` (or `make install`) to refresh the plugin cache.
+> [!NOTE]
+> If a hook version in `.pre-commit-config.yaml` is updated, `make install` reinstalls the hook environments. If the tflint plugin version in `.tflint.hcl` changes, run `make tflint-init` (or `make install`) to refresh the plugin cache.
 
-### Opening a PR
+### Shipping to staging
 
-Branch from `develop`, push, open a PR targeting `develop`:
+Branch from `develop` and push:
 
 ```bash
 git switch develop
@@ -371,26 +409,29 @@ git switch -c feature/my-change
 git push -u origin feature/my-change
 ```
 
-CI runs the staging workflow. Within a minute the PR gets a sticky comment titled **"Terraform Plan · `staging`"** showing what would be applied. Review the plan as part of code review.
+Then open a PR targeting `develop`. Within a minute the PR gets a sticky comment titled **"Terraform Plan · `staging`"** showing what would be applied. Review the plan as part of code review.
 
-Merge the PR. The staging workflow triggers on changes under `infra/**`, `src/extractor/**`, or `src/uploader/**`. On merge, if anything under `src/extractor/**` changed, CI runs `build-and-push` first—it builds the container image, pushes it to the staging ECR repository, and publishes the resulting digest as a job output that the apply job consumes. Changes under `src/uploader/**` or service-only Terraform tweaks skip the Docker work; the uploader is a zip Lambda repackaged by Terraform on every apply, and infra-only changes re-apply with the previously-deployed digest. Either way, CI applies the changes to staging automatically, then runs `make smoke` as a post-apply check; a smoke failure fails the workflow. Smoke exercises both entry points—`TestExtractorSmoke` uploads directly to S3, `TestUploaderSmoke` goes through the uploader API and a presigned PUT—and both poll for a `succeeded` status in the results table.
+Merge the PR. CI applies the change to staging automatically, then runs `make smoke` as a post-apply gate—a smoke failure fails the workflow. Smoke exercises both entry points (see [Manual smoke test](#manual-smoke-test) above).
+
+> [!NOTE]
+> The staging workflow triggers on changes under `infra/**` (excluding the `iam/` and `registry/` roots), `src/extractor/**`, `src/uploader/**`, or `src/publisher/**`. If anything under `src/extractor/**` changed, CI runs `build-and-push` first—it builds the container image, pushes it to the staging ECR repository, and publishes the resulting digest as a job output the apply job consumes. Changes under `src/uploader/**`, `src/publisher/**`, or service-only Terraform tweaks skip the Docker work; the uploader and publisher are zip Lambdas repackaged by Terraform on every apply, and infra-only changes re-apply with the previously-deployed digest.
 
 ### Promoting to prod
 
 Open a PR from `develop` to `main`. CI posts a sticky **"Terraform Plan · `prod`"** comment. Review and merge.
 
-After the merge:
+After the merge, CI runs the prod pipeline and pauses at a manual gate:
 
-1. The prod workflow triggers on changes under `infra/**`, `src/extractor/**`, or `src/uploader/**`. If anything under `src/extractor/**` changed, CI runs `build-and-push` (under the prod-plan role's scoped ECR push permission) to publish a new image and emit its digest. Uploader-only and infra-only changes skip this step.
-2. CI runs the `plan` job, generates a saved plan, uploads it as a workflow artifact.
-3. CI queues the `apply` job, which waits at the prod environment approval gate.
-4. You get notified.
-   - Open the workflow run.
-   - Review the plan in the previous job's logs.
-   - Click "Review deployments" → Approve.
-5. CI applies the saved plan. The exact same bytes that were generated in step 2.
+1. If the extractor changed, `build-and-push` publishes a new image and emits its digest; otherwise it resolves the currently-deployed digest.
+2. The `plan` job bakes that digest into a saved plan and uploads it as a workflow artifact.
+3. The `apply` job queues behind the `prod` environment approval gate, and you get notified.
+4. Open the workflow run, review the plan in the `plan` job's logs, then click **Review deployments → Approve**.
+5. CI applies the saved plan—the exact bytes from step 2, not a fresh plan against current state.
 
-If the plan looks wrong at the approval gate, reject it. Nothing is applied.
+If the plan looks wrong at the gate, reject it instead. Nothing is applied.
+
+> [!NOTE]
+> The prod workflow triggers on the same paths as staging—`infra/**` (excluding the `iam/` and `registry/` roots), `src/extractor/**`, `src/uploader/**`, `src/publisher/**`—and shares the build/digest behavior described above. What differs is the role split: `build-and-push` and `plan` run under the prod-*plan* role (scoped ECR push, no gate), and only `apply` assumes the prod role behind the environment approval.
 
 ### Adding new infrastructure
 
@@ -402,7 +443,7 @@ After adding a new Terraform module or bumping a provider version, regenerate th
 make lock
 ```
 
-Then commit the updated `.terraform.lock.hcl` files alongside your change. If you skip this, the `terraform_validate` pre-commit hook will fail in CI with "files were modified by this hook".
+Then commit the updated `.terraform.lock.hcl` files alongside your change. If you skip this, the `terraform_validate` pre-push hook will fail in CI with "files were modified by this hook" (it runs `terraform init`, which rewrites the lock file to add the missing linux/amd64 hashes).
 
 You only need to touch `infra/iam/` when:
 
@@ -422,12 +463,12 @@ Run `make help` for the full list of targets with descriptions, grouped by secti
 - `infra/tfplan.*` — Saved plan binaries
 - `infra/iam/iam.tfvars` — Contains your principal ARN
 - `tests/load/documents/` — The load-test corpus, materialized via `uv run nda` (not committed)
-- `tests/load/reports/` — Load-test run artifacts (JSON)
+- `tests/load/reports/` — Load-test run artifacts (JSON), except the committed `baseline/`
 
 ### Design notes
 
 - **State bucket and IAM roles** are the only resources provisioned with admin credentials. All subsequent operations use the scoped deploy roles.
 - **Backend files** (`infra/envs/*.backend.tfbackend`, `infra/iam/backend.tfbackend`) are committed to the repo and generated deterministically by `bootstrap-backend.sh` from the project name. CI regenerates them on every job; locally they are generated once.
 - **`make plan` / `make apply`** behave identically locally and in CI. The only differences are the `AWS_PROFILE` value and the `I_KNOW=1` flag required for prod.
-- **Every new resource must be tagged `Environment=<env>`**. Each deploy role has an explicit IAM deny on resources not tagged for its own environment. A missing tag won't surface during `plan`; it silently blocks the `apply`.
+- **Every new resource must be tagged `Environment=<env>`** (by convention). Each deploy role carries an explicit IAM deny on any resource whose `Environment` tag belongs to a *different* env, so one environment's role can't touch another's. The deny is `Null`-guarded so it doesn't fire on absent tags—otherwise resource creation (which carries no resource tag yet) would break—so it enforces cross-environment isolation rather than catching untagged resources. A cross-env violation won't surface during `plan`; it denies at `apply`.
 - **Prod protection is enforced at the IAM trust layer, not just CI**. The prod role's OIDC trust condition requires `environment:prod` GitHub environment context. Bypassing the approval gate in the workflow still results in a failed `AssumeRoleWithWebIdentity` call.

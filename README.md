@@ -36,7 +36,7 @@ This repository is that production layer: the AWS infrastructure that turns the 
 
 The pipeline is asynchronous from end to end. A caller signs `POST /uploads` against the uploader's API Gateway HTTP API (authorized via `AWS_IAM`); the presigner Lambda mints a UUIDv7 `document_id` and returns it alongside a short-lived pre-signed S3 PUT URL. The caller uploads the document directly to the ingestion bucket, bypassing API Gateway payload limits. The bucket emits an `Object Created` event to EventBridge, which routes it to an SQS queue (backed by a dead-letter queue) that triggers the extractor Lambda, packaged as a container image to carry the heavy LLM dependencies.
 
-The extractor runs [`agentic-kie`](https://github.com/gafnts/agentic-kie) and writes the structured record to a DynamoDB table keyed by `document_id`. That terminal write fans out through DynamoDB Streams to the publisher Lambda, which lands the result payload as JSON in a separate analytics bucket at the address the caller already learned at presign time. A consumer's `s3:ObjectCreated:*` subscription on that prefix fires the moment the object arrives, and the same objects back a Glue catalog table queried through a dedicated Athena workgroup.
+The extractor runs [`agentic-kie`](https://github.com/gafnts/agentic-kie)—as a single structured call or an agentic ReAct loop, a per-environment choice made at deploy time ([CONTRIBUTING](CONTRIBUTING.md#selecting-the-extractor-flavor))—and writes the structured record to a DynamoDB table keyed by `document_id`. That terminal write fans out through DynamoDB Streams to the publisher Lambda, which lands the result payload as JSON in a separate analytics bucket at the address the caller already learned at presign time. A consumer's `s3:ObjectCreated:*` subscription on that prefix fires the moment the object arrives, and the same objects back a Glue catalog table queried through a dedicated Athena workgroup.
 
 ![architecture](./docs/architecture.png)
 
@@ -62,8 +62,8 @@ The stack is provisioned with Terraform across three environments in one AWS acc
 > [!IMPORTANT]
 > Before deploying you need:
 > - [Terraform](https://developer.hashicorp.com/terraform/install) `~> 1.15`, [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) with credentials, and [uv](https://docs.astral.sh/uv/) for the Python tooling
-> - a [GitHub OIDC provider](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws) in the account (the IAM module references it but does not create it)
-> - an **LLM provider key** and a **LangSmith key**, stored in AWS Secrets Manager
+> - a [GitHub OIDC provider](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws) in the AWS account
+> - an **LLM provider key** and a **LangSmith key**
 
 Stand up a local instance in four steps.
 
