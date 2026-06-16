@@ -30,7 +30,8 @@ This directory records the significant architectural decisions made in this proj
 | [0010](0010-uploader-module.md) | Uploader module (presigner, API Gateway, IAM authentication) | Accepted |
 | [0011](0011-s3-as-result-delivery.md) | S3 as result delivery | Accepted |
 | [0012](0012-results-module.md) | Results module (Streams consumer, analytics bucket, Glue and Athena) | Superseded by ADR-0014 |
-| [0013](0013-single-tenant-deployment-model.md) | Single-tenant deployment model | Accepted |
+| [0013](0013-single-tenant-deployment-model.md) | Single-tenant deployment model | Amended by ADR-0017 |
 | [0014](0014-split-results-module.md) | Split the results module into publisher and analytics | Accepted |
 | [0015](0015-load-testing-strategy.md) | Load-testing strategy | Accepted |
 | [0016](0016-agentic-flavor-deployment.md) | Agentic-flavor deployment | Accepted |
+| [0017](0017-refine-tenancy-unit-to-schema.md) | Refine the tenancy unit to the schema, not the caller | Accepted |
