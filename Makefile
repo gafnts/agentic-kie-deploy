@@ -19,7 +19,7 @@ REG_BACKEND := -backend-config=envs/$(ENV).backend.tfbackend
         iam-init iam-plan iam-apply iam-destroy \
         registry-init registry-plan registry-apply registry-destroy \
         build-extractor \
-        init plan ci-plan apply ci-apply destroy lock \
+        init plan ci-plan apply ci-apply destroy destroy-env lock \
         _check-backend _check-registry-backend
 
 help:
@@ -164,6 +164,22 @@ destroy: _check-backend ## Destroy all infrastructure for ENV (requires explicit
 	@if [ "$(ENV)" = "prod" ] && [ "$(I_KNOW)" != "1" ]; then \
 		echo "Refusing to destroy prod. Re-run with I_KNOW=1."; exit 1; fi
 	$(TF) destroy $(VARS)
+
+# Tear down both per-env stacks in one shot, service first (it reads the ECR repo
+# via a data source, so the registry must outlive it). Each sub-make re-inits its
+# own backend for ENV. The placeholder digest only satisfies the required variable's
+# validation; destroy reads the resources to remove from state, not from this value.
+# Prod still needs its guards cleared by hand first (see CONTRIBUTING > Teardown).
+destroy-env: ## Destroy the service + registry stacks for ENV (service first; requires explicit ENV; refuses prod unless I_KNOW=1)
+	@if [ "$(origin ENV)" != "command line" ] && [ "$(origin ENV)" != "environment" ]; then \
+		echo "destroy-env requires explicit ENV (e.g. make destroy-env ENV=local). Refusing default."; exit 1; fi
+	@if [ "$(ENV)" = "prod" ] && [ "$(I_KNOW)" != "1" ]; then \
+		echo "Refusing to destroy prod. Re-run with I_KNOW=1 after clearing prod guards (DynamoDB deletion protection, non-empty buckets, non-empty ECR); see CONTRIBUTING > Teardown."; exit 1; fi
+	$(MAKE) init ENV=$(ENV)
+	TF_VAR_extractor_image_digest=sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+		$(MAKE) destroy ENV=$(ENV) I_KNOW=$(I_KNOW)
+	$(MAKE) registry-init ENV=$(ENV)
+	$(MAKE) registry-destroy ENV=$(ENV) I_KNOW=$(I_KNOW)
 
 
 # MAINTENANCE
