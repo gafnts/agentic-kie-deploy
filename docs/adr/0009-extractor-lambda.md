@@ -74,13 +74,13 @@ The asymmetry is deliberate: a saved-plan workflow that takes a `-var` at apply 
 
 ### Sizing
 
-| Lever              | Value                | Reasoning                                                                                                                                                                                              |
-| ------------------ | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Timeout            | **120 s**            | ADR-0001's benchmark put Gemini Standard single-pass at ~10 s end-to-end; the 12× headroom absorbs provider tail latency without giving a runaway invocation an unbounded cost ceiling.                |
-| Memory             | **2048 MB**          | The container image carries `agentic-kie` plus transitive libraries; warm invocations are dominated by network wait, not CPU, but the larger memory footprint also raises the vCPU allocation and shortens cold-start init. |
-| Ephemeral storage  | **2048 MB** (`/tmp`) | Long agreements in the Kleister NDA corpus are several MB on disk; doubling the default leaves headroom for OCR intermediate files without paying for the 10 GB ceiling.                               |
-| Architecture       | **arm64**            | Graviton is ~20% cheaper per GB-second than x86_64 with no behavioral difference for an I/O-bound workload (the LLM call dominates; the CPU barely participates). Built on a native arm64 runner—see note below. |
-| Runtime            | Container image      | Settled in ADR-0001 and ADR-0008.                                                                                                                                                                       |
+| Lever | Value | Reasoning |
+| --- | --- | --- |
+| Timeout | **120 s** | ADR-0001's benchmark put Gemini Standard single-pass at ~10 s end-to-end; the 12× headroom absorbs provider tail latency without giving a runaway invocation an unbounded cost ceiling. |
+| Memory | **2048 MB** | The container image carries `agentic-kie` plus transitive libraries; warm invocations are dominated by network wait, not CPU, but the larger memory footprint also raises the vCPU allocation and shortens cold-start init. |
+| Ephemeral storage | **2048 MB** (`/tmp`) | Long agreements in the Kleister NDA corpus are several MB on disk; doubling the default leaves headroom for OCR intermediate files without paying for the 10 GB ceiling. |
+| Architecture | **arm64** | Graviton is ~20% cheaper per GB-second than x86_64 with no behavioral difference for an I/O-bound workload (the LLM call dominates; the CPU barely participates). Built on a native arm64 runner—see note below. |
+| Runtime | Container image | Settled in ADR-0001 and ADR-0008. |
 
 > [!NOTE]
 > The `build-and-push` jobs in **both** `.github/workflows/deploy-staging.yml` and `.github/workflows/deploy-prod.yml` move to GitHub's native arm64 runner (`runs-on: ubuntu-24.04-arm`), free on public repositories. This avoids QEMU emulation entirely: builds run at native speed (roughly 2–3× faster than emulated arm64 on an x86_64 host), and the build environment matches Lambda's runtime architecture, eliminating a class of "works in CI, fails at deploy" bugs from emulated syscall differences. The job keeps `docker/setup-buildx-action@v3` (the named builder is required for `buildx build --push`) and does **not** need `docker/setup-qemu-action`. The build line becomes `docker buildx build --platform=linux/arm64 --push -t "$REPO_URL:$IMAGE_TAG" src/extractor/`—note that `--push` moves into the build invocation, since a buildx platform-targeted build cannot stay in the local Docker image store.
@@ -145,13 +145,13 @@ The cost is bounded: a redelivery for an already-terminal document is a couple o
 
 The role is created inside the module, named `agentic-kie-deploy-${env}-extractor-exec`, and tagged `Environment = ${env}` so the `iam/` stack's `DenyTouchingOtherEnvs` guard is honored. Inline policies, not managed:
 
-| Statement              | Action                                                                 | Resource                                                              |
-| ---------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `SqsConsume`           | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes`    | `var.queue_arn`                                                       |
-| `IngestionReadObject`  | `s3:GetObject`                                                         | `${var.ingestion_bucket_arn}/*`                                       |
-| `ResultsWrite`         | `dynamodb:PutItem`, `dynamodb:UpdateItem`, `dynamodb:GetItem`          | `var.results_table_arn`                                               |
-| `SecretsRead`          | `secretsmanager:GetSecretValue`                                        | `data.aws_secretsmanager_secret.llm_provider.arn`, `data.aws_secretsmanager_secret.langsmith.arn` |
-| `LogsWrite`            | `logs:CreateLogStream`, `logs:PutLogEvents`                            | `${aws_cloudwatch_log_group.extractor.arn}:*`                         |
+| Statement | Action | Resource |
+| --- | --- | --- |
+| `SqsConsume` | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` | `var.queue_arn` |
+| `IngestionReadObject` | `s3:GetObject` | `${var.ingestion_bucket_arn}/*` |
+| `ResultsWrite` | `dynamodb:PutItem`, `dynamodb:UpdateItem`, `dynamodb:GetItem` | `var.results_table_arn` |
+| `SecretsRead` | `secretsmanager:GetSecretValue` | `data.aws_secretsmanager_secret.llm_provider.arn`, `data.aws_secretsmanager_secret.langsmith.arn` |
+| `LogsWrite` | `logs:CreateLogStream`, `logs:PutLogEvents` | `${aws_cloudwatch_log_group.extractor.arn}:*` |
 
 ECR pull is *not* in the execution role—ADR-0008's repository policy already grants `lambda.amazonaws.com` pull rights scoped by `aws:SourceArn` to this function's ARN. CloudWatch Logs `CreateLogGroup` is not granted either; the module owns the log group as a resource so the function never needs to create it. The two secrets share one `SecretsRead` statement rather than splitting into two near-identical statements; the resource list is the audit boundary either way.
 
@@ -165,15 +165,15 @@ The Lambda fetches both secrets on first use via cached getters, so the fetch ha
 
 Seven environment variables wire the Lambda into its secrets, the results table, the LangSmith project, and the queue's retry budget, each with a deliberate provenance:
 
-| Env var                    | Value                                                                        | Set by                                                              |
-| -------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `LLM_MODEL`                | LLM model identifier (e.g. `gemini-3.1-flash-lite-preview`)                  | Terraform, from `var.llm_model`                                     |
-| `LLM_PROVIDER_SECRET_ARN`  | ARN of the LLM provider secret                                               | Terraform, from `data.aws_secretsmanager_secret.llm_provider.arn`   |
-| `LANGSMITH_PROJECT`        | `${var.project_name}-${var.environment}` (e.g. `agentic-kie-deploy-staging`) | Terraform, composed at the root from `project_name` + `environment` |
-| `LANGSMITH_SECRET_ARN`     | ARN of the LangSmith secret                                                  | Terraform, from `data.aws_secretsmanager_secret.langsmith.arn`      |
-| `RESULTS_TABLE_NAME`       | Name of the DynamoDB results table                                           | Terraform, from `var.results_table_name`                            |
-| `SQS_MAX_RECEIVE_COUNT`    | The queue's `maxReceiveCount` (e.g. `3`)                                      | Terraform, from `module.queue.max_receive_count`                    |
-| `LANGSMITH_API_KEY`        | The fetched LangSmith API key value                                          | Lambda at cold start, after `secretsmanager:GetSecretValue`         |
+| Env var | Value | Set by |
+| --- | --- | --- |
+| `LLM_MODEL` | LLM model identifier (e.g. `gemini-3.1-flash-lite-preview`) | Terraform, from `var.llm_model` |
+| `LLM_PROVIDER_SECRET_ARN` | ARN of the LLM provider secret | Terraform, from `data.aws_secretsmanager_secret.llm_provider.arn` |
+| `LANGSMITH_PROJECT` | `${var.project_name}-${var.environment}` (e.g. `agentic-kie-deploy-staging`) | Terraform, composed at the root from `project_name` + `environment` |
+| `LANGSMITH_SECRET_ARN` | ARN of the LangSmith secret | Terraform, from `data.aws_secretsmanager_secret.langsmith.arn` |
+| `RESULTS_TABLE_NAME` | Name of the DynamoDB results table | Terraform, from `var.results_table_name` |
+| `SQS_MAX_RECEIVE_COUNT` | The queue's `maxReceiveCount` (e.g. `3`) | Terraform, from `module.queue.max_receive_count` |
+| `LANGSMITH_API_KEY` | The fetched LangSmith API key value | Lambda at cold start, after `secretsmanager:GetSecretValue` |
 
 The Lambda also sets `LANGSMITH_TRACING=true` at cold start to arm the SDK; it is not Terraform-provided, which is why it is absent from the rows above.
 
@@ -275,13 +275,13 @@ The same local is forwarded to `module.extractor` as `timeout_seconds`, so both 
 
 ### Module responsibilities
 
-| Module / Stack       | Responsibility                                                                                                              |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `infra/registry/`    | Repository, lifecycle policy, repository policy (ADR-0008). Output: `repository_url`.                                       |
-| CI `build-and-push`  | Build image (arm64) on a native arm64 runner, push to env repo, publish digest as job output. Applied to **both** `deploy-staging.yml` and `deploy-prod.yml`: switches `runs-on` to `ubuntu-24.04-arm` and uses `docker buildx build --platform=linux/arm64 --push`. |
+| Module / Stack | Responsibility |
+| --- | --- |
+| `infra/registry/` | Repository, lifecycle policy, repository policy (ADR-0008). Output: `repository_url`. |
+| CI `build-and-push` | Build image (arm64) on a native arm64 runner, push to env repo, publish digest as job output. Applied to **both** `deploy-staging.yml` and `deploy-prod.yml`: switches `runs-on` to `ubuntu-24.04-arm` and uses `docker buildx build --platform=linux/arm64 --push`. |
 | `infra/modules/extractor/` | Lambda function, execution role + inline policies, event source mapping, log group. Inputs: image URI, queue/bucket/table ARNs, both secret ARNs. |
-| `infra/modules/queue/` | Receives `lambda_timeout_seconds` from `local.extractor_timeout_seconds` in the root module; placeholder default removed.  |
-| `iam/`               | Unchanged; `PowerUserAccess` already covers Lambda + IAM create needed by the deploy roles.                                 |
+| `infra/modules/queue/` | Receives `lambda_timeout_seconds` from `local.extractor_timeout_seconds` in the root module; placeholder default removed. |
+| `iam/` | Unchanged; `PowerUserAccess` already covers Lambda + IAM create needed by the deploy roles. |
 
 ## Consequences
 
