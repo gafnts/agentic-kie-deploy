@@ -34,6 +34,10 @@ This repo contains the Terraform infrastructure for the Agentic KIE project, dep
   - [Shipping to staging](#shipping-to-staging)
   - [Promoting to prod](#promoting-to-prod)
   - [Adding new infrastructure](#adding-new-infrastructure)
+- [Teardown](#teardown)
+  - [Destroy the per-env stacks](#destroy-the-per-env-stacks)
+  - [Destroy the IAM roles](#destroy-the-iam-roles)
+  - [Delete the out-of-band resources](#delete-the-out-of-band-resources)
 - [Reference](#reference)
   - [Make targets](#make-targets)
   - [Files that are gitignored](#files-that-are-gitignored)
@@ -450,6 +454,50 @@ You only need to touch `infra/iam/` when:
 - Adding a new IAM-related resource pattern that needs explicit allow (rare).
 - Tightening the permissions policy from `PowerUserAccess` to a service-specific allowlist.
 - Adding a new environment.
+
+## Teardown
+
+Teardown is [First-time setup](#first-time-setup) in reverse, and the order matters: every `terraform destroy` reads state from the state bucket, so the bucket goes **last**. Delete it earlier and you orphan whatever Terraform still tracks—the resources keep existing in AWS, but Terraform can no longer see them to remove them.
+
+`make destroy ENV=<env>` only tears down the per-env **service stack** (the pipeline in `infra/main.tf`). The registry stack (ECR), the IAM roles, the state bucket, and the out-of-band secrets each have their own lifecycle—just like setup—and survive it. Tear them down in this order.
+
+### Destroy the per-env stacks
+
+`make destroy-env ENV=<env>` chains the service-stack and registry (ECR) destroys for one environment in the right order (service first—it reads the ECR repo via a `data` source, so the repository must outlive it). Same guards as the rest of the Makefile: it refuses a defaulted `ENV` and refuses `prod` unless `I_KNOW=1`. Run it with the same profile you deploy with (the scoped deploy role).
+
+```bash
+make destroy-env ENV=local
+make destroy-env ENV=staging
+```
+
+> [!WARNING]
+> Prod carries deliberate guard rails that block an automated destroy until you clear them by hand:
+> - **DynamoDB** has `deletion_protection_enabled = true`—disable it first: `aws dynamodb update-table --no-deletion-protection-enabled --table-name agentic-kie-deploy-prod-results`.
+> - The **ingestion and analytics S3 buckets** are `force_destroy = false`—empty them first.
+> - The **prod ECR repository** is `force_delete = false`—delete its images first (`aws ecr batch-delete-image …`) or the registry destroy fails.
+>
+> Once cleared: `make destroy-env ENV=prod I_KNOW=1`.
+
+### Destroy the IAM roles
+
+The deploy roles live in a single all-env module, so one destroy removes all of them (the `prod` role included, hence `I_KNOW=1`). Run with **admin/default credentials**—the same creds you used for `make iam-apply`, not the assumed deploy role. (`PowerUserAccess` excludes IAM writes, and each role's cross-env deny stops it from deleting another env's role, so the scoped role can't do this job.)
+
+```bash
+AWS_PROFILE=default make iam-destroy I_KNOW=1
+```
+
+### Delete the out-of-band resources
+
+The six Secrets Manager secrets and the shared, versioned state bucket live outside Terraform (created by `make bootstrap` and by hand). `teardown.sh` is the mirror of `bootstrap.sh`: it deletes the secrets and empties + deletes the state bucket. Run it **last**, after every stack above is gone, again with admin/default credentials:
+
+```bash
+AWS_PROFILE=default bash teardown.sh
+```
+
+It prints exactly what it will delete and makes you type the bucket name to confirm. Secrets are scheduled for deletion with the default recovery window (recoverable); set `FORCE=1` to delete them immediately and irreversibly. The bucket deletion is always irreversible.
+
+> [!IMPORTANT]
+> Teardown leaves the account's **GitHub OIDC provider** in place. The IAM module references it but never created it (see [First-time setup](#first-time-setup)), and other projects in the account may depend on it. Remove it manually only if you're certain nothing else uses it.
 
 ## Reference
 
