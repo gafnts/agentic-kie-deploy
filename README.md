@@ -1,4 +1,4 @@
-<h1 align="center">Serverless Key Information Extraction</h1>
+<h1 align="center">Serverless Key Information Extraction on AWS</h1>
 <p align="center">
   <strong>Serverless, event-driven AWS infrastructure for asynchronous key information extraction with LLMs.</strong>
 </p>
@@ -169,6 +169,6 @@ The infrastructure is a set of small, per-concern Terraform modules wired togeth
 
 | Where | What |
 |---|---|
-| [CONTRIBUTING.md](CONTRIBUTING.md) | How to set up, deploy, and operate the stack (environments, branches, day-to-day workflow) |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to set up, deploy, operate, and tear down the stack |
 | [docs/README.md](docs/README.md) | Per-module reference: every lever, default, and tradeoff, plus the observability plane |
 | [docs/adr/](docs/adr/README.md) | Architecture decision records: why each choice was made and what was rejected |
